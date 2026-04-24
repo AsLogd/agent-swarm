@@ -1576,6 +1576,7 @@ async function spawnProviderProcess(
     taskId?: string;
     model?: string;
     cwd?: string;
+    vcsRepo?: string;
   },
   logDir: string,
   isYolo: boolean,
@@ -1617,6 +1618,7 @@ async function spawnProviderProcess(
     apiUrl: opts.apiUrl,
     apiKey: opts.apiKey,
     cwd: opts.cwd || process.cwd(),
+    vcsRepo: opts.vcsRepo,
     logFile: opts.logFile,
     additionalArgs: opts.additionalArgs,
     iteration: opts.iteration,
@@ -2913,6 +2915,7 @@ export async function runAgent(config: RunnerConfig, opts: RunnerOptions) {
                 taskId: task.id,
                 model: (task as { model?: string }).model,
                 cwd: resumeCwd,
+                vcsRepo: task.vcsRepo,
               },
               logDir,
               isYolo,
@@ -3220,6 +3223,7 @@ export async function runAgent(config: RunnerConfig, opts: RunnerOptions) {
                 taskId: trigger.taskId,
                 model: taskModel,
                 cwd: effectiveCwd,
+                vcsRepo: taskVcsRepo,
               },
               logDir,
               isYolo,
