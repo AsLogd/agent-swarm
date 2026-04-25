@@ -9,8 +9,8 @@ tags: [plan, integrations, jira, oauth, webhooks, trackers]
 status: ready
 research_source: thoughts/taras/research/2026-04-21-jira-integration.md
 autonomy: critical
-last_updated: 2026-04-22
-last_updated_by: claude (post-review)
+last_updated: 2026-04-24
+last_updated_by: claude (review pass 2, post file-review)
 ---
 
 # Jira Cloud Integration — Implementation Plan
@@ -27,7 +27,8 @@ The research in `thoughts/taras/research/2026-04-21-jira-integration.md` already
 - **Tracker dispatcher** at `src/http/trackers/index.ts:9` is a 1-line call to `handleLinearTracker` — extend to dispatch Jira.
 - **Provider union** at `src/tracker/types.ts:1` is `"linear"` only.
 - **Task source enum** at `src/types.ts:56-67` is missing `"jira"`.
-- **DB CHECK constraint** on `agent_tasks.source` (last set by migration 009) does not include `"jira"`. Latest migration is `040_slack_thread_composite_index.sql` → new migration is `041`.
+- **DB CHECK constraint** on `agent_tasks.source` (last set by migration 009) does not include `"jira"`. Latest migration is `042_task_context_key.sql` → new migration is `043`. (Plan was originally written targeting `041`; between plan date and impl, `041_mcp_oauth_tokens.sql` and `042_task_context_key.sql` landed — see the Commit-drift addendum below.)
+- **Cross-ingress `contextKey`** (`src/tasks/context-key.ts`, added by commit `6c29daf`) is populated at every task-ingress site. Jira ingress must extend the `TrackerProvider` union there and populate `task:trackers:jira:{issueKey}` when it creates tasks. The `agent_tasks` column list now includes `contextKey`, so the Phase 1 rebuild must preserve it.
 - **MCP tracker tools** (`src/tools/tracker/*.ts`) already use `z.string()` for `provider`; only describe-string copy needs updating.
 - **OAuth wrapper** (`src/oauth/wrapper.ts`) is generic PKCE-S256, already Jira-ready. `src/oauth/ensure-token.ts` and `src/oauth/keepalive.ts` are provider-agnostic.
 - **`initLinear()`** is called at `src/http/index.ts:266` and `src/http/core.ts:125`. `initJira()` hooks in at the same two spots.
@@ -44,6 +45,16 @@ The research in `thoughts/taras/research/2026-04-21-jira-integration.md` already
 - `openapi.json` is regenerated and committed.
 - `docs-site/content/docs/(documentation)/guides/jira-integration.mdx` describes setup end-to-end.
 
+### Key Discoveries
+
+- The generic OAuth wrapper (`src/oauth/wrapper.ts`, PKCE-S256) is already 3LO-compatible — Jira needs only a provider-specific config + the Atlassian `accessible-resources` call to resolve `cloudId`.
+- `tracker_sync` has a `UNIQUE(provider, entityType, externalId)` constraint — inserting this row **before** creating the task gives us idempotent inbound semantics without needing cross-layer transactions (see Phase 3 step 3 atomicity note below).
+- `oauth_apps.metadata` is an opaque JSON blob, so it can carry both `{ cloudId, siteUrl }` and `{ webhookIds: [...] }` without a schema change — as long as updates go through the Phase 2 `updateJiraMetadata()` read-modify-write helper to avoid clobbering.
+- The template + event-bus registry used by Linear (`src/linear/templates.ts`, `src/linear/outbound.ts`) is fully generic — Jira outbound is a ~1-file add (`src/jira/outbound.ts`) once the templates are registered.
+- The integrations UI shipped in commit `60a3324` (#364): `new-ui/src/lib/integrations-catalog.ts` is now the canonical place for a Jira card, mirroring the existing Linear entry at `integrations-catalog.ts:313-362`. The `specialFlow: "linear-oauth"` pattern (via `linear-oauth-section.tsx`) gives us a concrete template for a `jira-oauth-section.tsx`.
+- Per-route `auth: { apiKey: false }` is now properly honored by the core middleware after commit `8bb801d` — Phase 2's OAuth + webhook-receive routes can rely on the `route()` factory default rather than the previous hardcoded exception list.
+- The centralized secret scrubber (`src/utils/secret-scrubber.ts`, commit `4b9a155`) automatically covers env-sourced values ≥12 chars. `JIRA_CLIENT_SECRET`, `JIRA_SIGNING_SECRET`, and stored OAuth access/refresh tokens are therefore scrubbed out of logs without additional wiring. Only if we add a Jira-specific structural token format does `TOKEN_REGEXES` need extension.
+
 ## What We're NOT Doing (v1)
 
 - Multi-workspace per install (single `cloudId` only; v2 concern).
@@ -56,24 +67,70 @@ The research in `thoughts/taras/research/2026-04-21-jira-integration.md` already
 
 ## Implementation Phases
 
+### Phase 0 — Manual setup (Taras, before any code)
+
+Goal: everything that has to happen outside the swarm codebase before Phase 1 can run. None of this is automatable — it's Atlassian account state + env-file values.
+
+Steps:
+1. **Create a Jira Cloud OAuth 2.0 (3LO) app** at https://developer.atlassian.com/console/myapps/ → "Create" → "OAuth 2.0 integration".
+2. **Add scopes** under Permissions → Jira API:
+   - `read:jira-work`
+   - `write:jira-work`
+   - `manage:jira-webhook`
+   - `offline_access`
+   - `read:me` (user profile for `/rest/api/3/myself` — needed to resolve the bot's `accountId`)
+   - (Atlassian lists classic scopes as RECOMMENDED in current docs; see errata M2 for the granular-scope migration path if we ever revisit.)
+3. **Configure callback URL** (OAuth 2.0 tab):
+   - Dev: `http://localhost:3013/api/trackers/jira/callback`
+   - Prod: `<MCP_BASE_URL>/api/trackers/jira/callback` (must be HTTPS; localhost is the only non-HTTPS value Atlassian accepts)
+4. **Configure the webhook signing secret** (Atlassian Developer Console → your app → Settings → Webhook signing secret, or equivalent screen — Atlassian's signing secret is **app-level**, NOT per-webhook and NOT swarm-generated). Copy the value Atlassian shows you; this is what we'll set as `JIRA_SIGNING_SECRET` in `.env`. Every dynamic webhook registered by this app (whether via our `POST /webhook-register` route or manually) is signed with this secret.
+5. **Take note of** `Client ID` and `Client secret` from the app → Settings screen.
+6. **Pick the bot Atlassian account.** Whichever user completes the OAuth consent flow becomes the "bot" — their `accountId` is what we compare against for assignee-triggered tasks and comment-author skipping. For solo dev: Taras's own account is fine. For production: create a dedicated Atlassian user and have them consent once.
+7. **Pick a test Jira project** with at least one assignable issue. Note the project key (e.g. `TEST`) for the Phase 3 JQL filter.
+8. **For inbound webhook testing locally**: start ngrok (`ngrok http 3013`) and point `MCP_BASE_URL` at the tunnel URL. Atlassian's dynamic webhooks require HTTPS — ngrok satisfies this.
+9. **Populate `.env`** before starting Phase 2:
+   ```
+   JIRA_CLIENT_ID=<from step 5>
+   JIRA_CLIENT_SECRET=<from step 5>
+   JIRA_SIGNING_SECRET=<from step 4 — the app-level value Atlassian gave you>
+   JIRA_REDIRECT_URI=http://localhost:3013/api/trackers/jira/callback   # optional; this is the default
+   # JIRA_DISABLE=true   # uncomment to short-circuit initJira() for rollback
+   ```
+
+### Success Criteria:
+
+#### Manual Verification:
+- [ ] The Atlassian app page shows all 5 scopes enabled and the callback URL configured.
+- [ ] `.env` has `JIRA_CLIENT_ID`, `JIRA_CLIENT_SECRET`, `JIRA_SIGNING_SECRET` set (and ngrok running if remote-tunneled).
+
+**Implementation Note:** Pause for confirmation before Phase 1. This phase is pure manual prep and needs to be done once per environment.
+
 ### Phase 1 — Schema migration + type/enum plumbing
 
 Goal: add `"jira"` as a recognized provider & task source throughout the codebase without wiring any new behavior. Safe, reversible-by-forward-migration, unblocks later phases.
 
 Steps:
-1. Create `src/be/migrations/041_jira_source.sql`. Use the SQLite table-rebuild pattern from the most-recent `agent_tasks` rebuild at `src/be/migrations/026_drop_epics.sql:7-100` (NOT 009 — 009 predates several column additions like `outputSchema`, `compactionCount`, `peakContextPercent`, `totalContextTokensUsed`, `contextWindowSize`, `was_paused`, and the removal of `epicId`):
-   - `CREATE TABLE agent_tasks_new (...)` copying the full current schema (use 026's CREATE TABLE block as the starting point, then also add columns introduced after 026: `slackReplySent` (034), `vcsInstallationId` + `vcsNodeId` (033), `credentialKeySuffix` (028), `credentialKeyType` (029), `requestedByUserId` (031), `swarmVersion` (037)). Verify the final column list against a live DB (`sqlite3 agent-swarm-db.sqlite ".schema agent_tasks"`) before shipping. Add `'jira'` to the `source` CHECK list.
+1. Create `src/be/migrations/043_jira_source.sql` (latest existing is `042_task_context_key.sql`). Use the SQLite table-rebuild pattern from the most-recent `agent_tasks` rebuild at `src/be/migrations/026_drop_epics.sql:7-100` (NOT 009 — 009 predates several column additions like `outputSchema`, `compactionCount`, `peakContextPercent`, `totalContextTokensUsed`, `contextWindowSize`, `was_paused`, and the removal of `epicId`):
+   - `CREATE TABLE agent_tasks_new (...)` copying the full current schema (use 026's CREATE TABLE block as the starting point, then also add columns introduced after 026: `slackReplySent` (034), `vcsInstallationId` + `vcsNodeId` (033), `credentialKeySuffix` (028), `credentialKeyType` (029), `requestedByUserId` (031), `swarmVersion` (037), **`contextKey` (042)**). Verify the final column list against a live DB (`sqlite3 agent-swarm-db.sqlite ".schema agent_tasks"`) before shipping. Add `'jira'` to the `source` CHECK list.
    - Use explicit column lists in `INSERT INTO agent_tasks_new (...) SELECT ... FROM agent_tasks;` (not `SELECT *` — mirror 026's pattern) to be robust against column-order drift.
    - `DROP TABLE agent_tasks; ALTER TABLE agent_tasks_new RENAME TO agent_tasks;`
-   - Recreate all indexes that existed on `agent_tasks`. Grep the migrations folder for `ON agent_tasks(` to get the authoritative list — at minimum: idx on agentId, status, offeredTo, taskType, agentmailThreadId, schedule_id, workflow_run, parentTaskId (034), slack_thread composite (040), swarmVersion (037), requested_by (031).
+   - Recreate all indexes that existed on `agent_tasks`. Grep the migrations folder for `ON agent_tasks(` to get the authoritative list — at minimum: idx on agentId, status, offeredTo, taskType, agentmailThreadId, schedule_id, workflow_run, parentTaskId (034), slack_thread composite (040), swarmVersion (037), requested_by (031), **`context_key` + `context_key_status` composite (042)**.
 2. Add `"jira"` to `AgentTaskSourceSchema` in `src/types.ts:56-67`.
 3. Update `TrackerProvider` union at `src/tracker/types.ts:1` to `"linear" | "jira"`.
-4. Update provider describe strings in `src/tools/tracker/tracker-link-task.ts:15`, `tracker-sync-status.ts:15`, and `tracker-map-agent.ts:15` to mention `'jira'` alongside `'linear'` (e.g. `"Tracker provider (e.g. 'linear', 'jira')"`). Note: `tracker-status.ts:19` is part of an `outputSchema` (no describe string there) — instead update the hardcoded provider iteration list at `src/tools/tracker/tracker-status.ts:29` from `const providers = ["linear"] as const;` to `const providers = ["linear", "jira"] as const;` so the tool reports Jira connection status.
+4. Extend the cross-ingress context-key module (`src/tasks/context-key.ts`, added by commit `6c29daf`):
+   - Add `"jira"` to the `TrackerProvider` union at the top of the file.
+   - Extend the `ParsedContextKey` union with a `subFamily: "jira"` arm carrying `{ issueIdentifier: string }` (case-preserved, mirroring Linear).
+   - Add a `buildJiraContextKey(issueIdentifier: string)` builder (sanitize the separator `:` the same way the existing Linear builder does — throw on violation).
+   - Extend `parseContextKey` to round-trip the Jira arm.
+   - Add unit-test coverage in `src/tests/context-key.test.ts` for the Jira builder + round-trip (mirror the Linear cases already there).
+5. Update provider describe strings in `src/tools/tracker/tracker-link-task.ts:15`, `tracker-sync-status.ts:15`, and `tracker-map-agent.ts:15` to mention `'jira'` alongside `'linear'` (e.g. `"Tracker provider (e.g. 'linear', 'jira')"`). Note: `tracker-status.ts:19` is part of an `outputSchema` (no describe string there) — instead update the hardcoded provider iteration list at `src/tools/tracker/tracker-status.ts:29` from `const providers = ["linear"] as const;` to `const providers = ["linear", "jira"] as const;` so the tool reports Jira connection status.
 
 Files touched:
-- `src/be/migrations/041_jira_source.sql` (new)
+- `src/be/migrations/043_jira_source.sql` (new)
 - `src/types.ts`
 - `src/tracker/types.ts`
+- `src/tasks/context-key.ts`
+- `src/tests/context-key.test.ts`
 - `src/tools/tracker/tracker-link-task.ts`
 - `src/tools/tracker/tracker-sync-status.ts`
 - `src/tools/tracker/tracker-map-agent.ts`
@@ -86,7 +143,7 @@ Files touched:
 - [ ] Lint passes: `bun run lint:fix`
 - [ ] DB boundary check passes: `bash scripts/check-db-boundary.sh`
 - [ ] Fresh DB boots clean: `rm -f agent-swarm-db.sqlite agent-swarm-db.sqlite-wal agent-swarm-db.sqlite-shm && bun run start:http &` then `curl -s -H "Authorization: Bearer 123123" http://localhost:3013/api/agents | jq '.agents | length'`
-- [ ] Existing DB migrates cleanly (test against a copy of a populated DB if available) — grep for `[migrations] applied 041_jira_source` in logs
+- [ ] Existing DB migrates cleanly (test against a copy of a populated DB if available) — grep for `[migrations] applied 043_jira_source` in logs
 - [ ] Existing unit tests still pass: `bun test`
 - [ ] `'jira'` is present in the source CHECK: `sqlite3 agent-swarm-db.sqlite "SELECT sql FROM sqlite_master WHERE name='agent_tasks'"` shows `'jira'` in the list
 
@@ -114,7 +171,7 @@ Steps:
    - `initJira()` — idempotent; calls `upsertOAuthApp("jira", { authorizeUrl: "https://auth.atlassian.com/authorize", tokenUrl: "https://auth.atlassian.com/oauth/token", scopes: "read:jira-work write:jira-work manage:jira-webhook offline_access read:me", metadata: '{}' , ... })`. Returns `true` if enabled. (Outbound sync + webhook-lifecycle timer wired in later phases via this same function.)
    - `resetJira()` — cleanup for reload. **Must also call `resetBotAccountIdCache()`** (from Phase 3) so a reconnect as a different Atlassian user invalidates the cached bot `accountId`.
 4. Create `src/jira/oauth.ts` mirroring `src/linear/oauth.ts`:
-   - `getJiraOAuthConfig()` — loads from `getOAuthApp("jira")`, builds an `OAuthProviderConfig` for the generic wrapper. `extraParams: { audience: "api.atlassian.com", prompt: "consent" }`.
+   - `getJiraOAuthConfig()` — loads from `getOAuthApp("jira")`, builds an `OAuthProviderConfig` for the generic wrapper. `extraParams: { audience: "api.atlassian.com" }`. (We intentionally omit `prompt: "consent"`: forcing the consent screen on every reconnect is UX noise for an already-authorized app. Atlassian's default behavior — skip consent if scopes haven't changed — is what we want.)
    - `getJiraAuthorizationUrl()` — wraps `buildAuthorizationUrl(config)`.
    - `handleJiraCallback(code, state)` — calls `exchangeCode(config, code, state)` (see `src/oauth/wrapper.ts:84` for signature), then:
      - `fetch("https://api.atlassian.com/oauth/token/accessible-resources", { headers: { Authorization: "Bearer " + accessToken }})`.
@@ -188,11 +245,18 @@ Steps:
    - `handleJiraWebhook(req, res)` — reads raw body, verifies signature against `JIRA_SIGNING_SECRET` from env, parses JSON, dispatches to handlers in `src/jira/sync.ts` (fire-and-forget; always returns 200 once accepted to prevent Jira retries).
 3. Create `src/jira/sync.ts`:
    - `resolveBotAccountId()` — `jiraFetch("/rest/api/3/myself")`, returns `accountId`. Cached in a module-scoped variable. Export `resetBotAccountIdCache()` — called from `resetJira()` (Phase 2 step 3) to clear the cache on OAuth reconnect so a different Atlassian user identity picks up correctly.
-   - `handleIssueEvent(event)` — for `jira:issue_updated`: inspect `event.changelog.items` for `field == "assignee"` transitions. If new assignee is the bot accountId, call `createTaskExtended({ task: <rendered template jira.issue.assigned>, source: "jira", ... })` and insert `tracker_sync` row keyed on `(provider="jira", entityType="task", externalId=event.issue.id, externalIdentifier=event.issue.key)`. Skip if existing sync row already has a swarm task. Both the `createTaskExtended` call and `tracker_sync` insert must go through a single transaction path so the UNIQUE constraint on `(provider, entityType, externalId)` in `tracker_sync` makes the operation idempotent for rapid-fire duplicate deliveries.
+   - `handleIssueEvent(event)` — for `jira:issue_updated`: inspect `event.changelog.items` for `field == "assignee"` transitions where the **new** assignee is the bot `accountId` (the transition-to-bot direction only; transitions FROM bot → someone else are ignored). Then:
+     1. **Insert `tracker_sync` row first**, keyed on `(provider="jira", entityType="task", externalId=event.issue.id, externalIdentifier=event.issue.key, externalUrl=<issue URL>)`. The `UNIQUE(provider, entityType, externalId)` constraint gates duplicates — a concurrent duplicate delivery will fail here cheaply before any task is created. Use `INSERT ... ON CONFLICT DO NOTHING` and check the returned row count; if zero rows inserted, the row already existed → skip task creation.
+     2. **Look up the existing swarm task** via the sync row's `swarmId` if the row pre-existed. If a prior task exists:
+        - If it's still `pending`/`in_progress`: append a prompt to the active task using the same pattern as Linear's `handleAgentSessionPrompted` (a "you were just reassigned to this issue" nudge). This also aligns the re-assignment path with the comment-mention path (errata I7).
+        - If the prior task is `completed`/`failed`/`cancelled`: create a **follow-up** task using the `jira.issue.followup` template (same behavior as a comment mention on a terminal task).
+     3. If no prior task: create a new task via `createTaskExtended({ task: <rendered jira.issue.assigned>, source: "jira", contextKey: buildJiraContextKey(event.issue.key), ... })` and update the sync row with the new `swarmId`.
+
+     This ordering (sync-row-first, task-second) sidesteps the cross-layer transaction problem noted in earlier errata: `createTaskExtended` manages its own internal transaction, but we never call it unless the UNIQUE-gated sync insert succeeded. A crash between the two inserts leaves an orphan `tracker_sync` row with a `NULL swarmId` — cleaner than an orphan task — and a retry path can reconcile.
    - `handleCommentEvent(event)` — for `comment_created` / `comment_updated`:
      1. **Self-authored skip.** If `event.comment.author.accountId === botAccountId`, return immediately — never process our own comments.
      2. **Outbound-echo skip.** Even for non-bot authors, check the existing `tracker_sync` row (if any) for this issue: if `lastSyncOrigin === "swarm"` AND `now - lastSyncedAt < 5000ms`, return. This catches the race where Jira echoes a just-posted swarm comment through the webhook before the sync row could be updated. (Matches Linear's outbound 5-second window.)
-     3. Then `extractMentions(event.comment.body)` to detect bot mention. If found AND no existing `tracker_sync` row for the issue: create task with `jira.issue.assigned` template. If tracker_sync row exists and task is completed/cancelled: create a follow-up task using `jira.issue.followup` template. If task is still in-progress: append prompt to active task (same pattern as Linear's `handleAgentSessionPrompted`).
+     3. Then `extractMentions(event.comment.body)` to detect bot mention. If found AND no existing `tracker_sync` row for the issue: create task with `jira.issue.assigned` template **and pass `contextKey: buildJiraContextKey(event.issue.key)`** to `createTaskExtended`. If tracker_sync row exists and task is completed/cancelled: create a follow-up task using `jira.issue.followup` template (same `contextKey`). If task is still in-progress: append prompt to active task (same pattern as Linear's `handleAgentSessionPrompted`).
    - `handleIssueDeleteEvent(event)` — cancel any linked swarm task.
 4. Create `src/jira/templates.ts` mirroring `src/linear/templates.ts`:
    - Register `jira.issue.assigned` — initial task instruction using issue key, summary, description (text via `extractText`), reporter, URL.
@@ -248,14 +312,16 @@ Steps:
    - For each event, look up `tracker_sync` row filtered by `(provider="jira", entityType="task", swarmId=<taskId>)`. Skip if not present.
    - Skip if `lastSyncOrigin === "external"` AND `now - lastSyncedAt < 5000ms` (same window Linear uses).
    - Call `jiraFetch(`/rest/api/2/issue/${sync.externalIdentifier}/comment`, { method: "POST", body: JSON.stringify({ body: <rendered message> }) })`. Message bodies:
-     - `task.created`: `":rocket: Swarm task started: <task summary>"`
-     - `task.completed`: `":white_check_mark: Swarm task completed.\n\n<task.output truncated to 4k chars>"`
-     - `task.failed`: `":x: Swarm task failed.\n\n<task.failureReason>"`
-     - `task.cancelled`: `":no_entry: Swarm task cancelled."`
+     - `task.created`: `"🚀 Swarm task started: <task summary>"`
+     - `task.completed`: `"✅ Swarm task completed.\n\n<task.output truncated to 4k chars>"`
+     - `task.failed`: `"❌ Swarm task failed.\n\n<task.failureReason>"`
+     - `task.cancelled`: `"⛔ Swarm task cancelled."`
+     - **Note:** use Unicode emoji (not `:shortcode:` form). Jira REST v2 plaintext bodies do not reliably expand shortcodes — they would render literally in the issue comment thread.
    - After posting, update `tracker_sync.lastSyncOrigin = "swarm"`, `lastSyncedAt = now`.
    - `teardownJiraOutboundSync()` — unsubscribes listeners.
 2. Call `initJiraOutboundSync()` at the end of `initJira()` (Phase 2 file). Call `teardownJiraOutboundSync()` in `resetJira()`.
 3. Handle token refresh transparently via the existing retry-once logic in `jiraFetch` (Phase 2).
+4. **Rate-limiting strategy (v1 decision):** rely on `jiraFetch`'s existing 429-retry-with-`Retry-After` (single retry) for transient bursts. No explicit queue or per-issue debounce. Rationale: Atlassian's per-tenant rate limits are generous for comment POSTs, lifecycle events on a single issue are naturally rate-limited by task duration (started → completed is minutes, not ms), and the event bus is single-threaded so we don't get thundering herds. Known v1 limitation — if 100+ tasks complete simultaneously across many issues (e.g., a scheduled batch), we may hit 429s and lose comments past the single-retry. Document in the integration guide's Known limitations section. V2: add a per-issue debounce window or a bounded outbound queue.
 
 Files touched:
 - `src/jira/outbound.ts` (new)
@@ -271,9 +337,9 @@ Files touched:
 
 #### Manual Verification:
 - [ ] Reuse the ngrok-tunneled webhook from Phase 3. Assign an issue to trigger a swarm task.
-- [ ] Wait for `task.created` — confirm a `:rocket: Swarm task started` comment appears on the Jira issue.
-- [ ] Let the task complete — confirm a `:white_check_mark: Swarm task completed` comment appears with output.
-- [ ] Trigger a task cancellation (via MCP `cancel-task`) — confirm `:no_entry: Swarm task cancelled` comment.
+- [ ] Wait for `task.created` — confirm a `🚀 Swarm task started` comment appears on the Jira issue.
+- [ ] Let the task complete — confirm a `✅ Swarm task completed` comment appears with output.
+- [ ] Trigger a task cancellation (via MCP `cancel-task`) — confirm `⛔ Swarm task cancelled` comment.
 - [ ] Confirm no infinite loop: the swarm-posted comment does NOT re-create a task. Tail server logs to confirm inbound handler short-circuits on `lastSyncOrigin="swarm"` within the 5-second window.
 - [ ] Inspect `tracker_sync` row — `lastSyncOrigin` toggles between `"swarm"` and `"external"` as expected.
 
@@ -300,14 +366,14 @@ Steps:
        }]
      }
      ```
-     POST to `/rest/api/3/webhook`. Pass the webhook `secret` query param (or header — consult Atlassian docs at implementation time) set to `JIRA_SIGNING_SECRET` so Jira signs deliveries.
+     POST to `/rest/api/3/webhook`. **No `secret` in the request body** — Atlassian signs dynamic webhooks using the signing secret configured at the **app level** in the Atlassian Developer Console (see Phase 0 step 4). Whatever value is set there must match the `JIRA_SIGNING_SECRET` env var; there is no per-webhook override.
      Response contains `webhookRegistrationResult[].createdWebhookId` + expiry. Persist via `updateJiraMetadata({ webhookIds: [...] })` (from Phase 2 step 2) so concurrent writes don't clobber `cloudId`/`siteUrl`.
-   - `refreshJiraWebhooks()` — reads `metadata.webhookIds` via `getJiraMetadata()`, calls `PUT /rest/api/3/webhook/refresh`. **TBD at implementation time:** the exact request body shape is not confirmed in the research doc — plan assumes `{ webhookIds: [<id>, ...] }`, but verify against current Atlassian docs (via Context7 `/atlassian/jira-cloud-rest-api` or the live docs at `developer.atlassian.com`) before coding. Updates new expiry times via `updateJiraMetadata(...)`.
-   - `startJiraWebhookKeepalive()` — timer every 12 hours; if any webhook expires within 7 days, calls `refreshJiraWebhooks()`. Logs + optional Slack alert on failure (mirror `src/oauth/keepalive.ts` alert pattern).
+   - `refreshJiraWebhooks()` — reads `metadata.webhookIds` via `getJiraMetadata()`, calls `PUT /rest/api/3/webhook/refresh` with body `{ "webhookIds": [<int>, ...] }`. Response is a single `{ "expirationDate": "<ISO-8601>" }` that applies to **all** refreshed webhooks (note: current Atlassian docs show two variants — one returns 200 + body, another returns 204 No Content; handle both). Unrecognized webhook IDs (ours have been deleted app-side) are silently ignored by Atlassian — on zero-successful-refresh we treat it as stale and log a warning instead of writing back. Updates new expiry times via `updateJiraMetadata(...)`. Confirmed shape via Context7 `/websites/developer_atlassian_cloud_jira_platform_rest_v3` during review.
+   - `startJiraWebhookKeepalive()` — runs an initial expiry check immediately on invocation (so a stale webhook is detected on boot instead of after the first 12-hour tick), then a recurring timer every 12 hours; if any webhook expires within 7 days, calls `refreshJiraWebhooks()`. Logs + optional Slack alert on failure (mirror `src/oauth/keepalive.ts` alert pattern).
    - `stopJiraWebhookKeepalive()` — cleanup.
 2. Call `startJiraWebhookKeepalive()` at the end of `initJira()`; call `stopJiraWebhookKeepalive()` in `resetJira()`.
-3. Add `POST /api/trackers/jira/webhook-register` route in `src/http/trackers/jira.ts` (authenticated, not public): accepts `{ jqlFilter }`, calls `registerJiraWebhook`. Returns the registered webhook ids + expiry.
-4. Add `DELETE /api/trackers/jira/webhook/:id` for admin cleanup: calls `DELETE /rest/api/3/webhook` with the id.
+3. Add `POST /api/trackers/jira/webhook-register` route in `src/http/trackers/jira.ts` with `auth: { apiKey: true }` (route-factory default; admins only — not public): accepts `{ jqlFilter }`, calls `registerJiraWebhook`. Returns the registered webhook ids + expiry.
+4. Add `DELETE /api/trackers/jira/webhook/:id` for admin cleanup, also `auth: { apiKey: true }`: calls `DELETE /rest/api/3/webhook` with the id.
 5. Fallback path: if `hasManageWebhookScope === false` (status endpoint exposes this from `oauth_tokens.scope`), surface instructions in `/status` for manual registration (the status endpoint should return `{ manualWebhookInstructions: "..." }` pointing at the docs guide section).
 6. Re-run `bun run docs:openapi`.
 
@@ -364,7 +430,14 @@ Steps:
    - **Known limitations (v1)** — explicitly call out: (a) single-workspace-per-install (`cloudId` is fixed at first OAuth connect); (b) `JIRA_SIGNING_SECRET` rotation requires re-registering every webhook manually — there is no drift detection between the env value and what Jira was configured with. Recommended rotation flow: set new `JIRA_SIGNING_SECRET` → restart → `DELETE` all existing webhooks → `POST /webhook-register` to re-register with new secret. For manually admin-registered webhooks, admins must also update the secret in Jira's webhook UI.
    - Related
 3. **OpenAPI**: final `bun run docs:openapi` after all routes are in. Commit `openapi.json` + `docs-site/content/docs/api-reference/**`.
-4. **UI**: `new-ui/src/pages/config/page.tsx` currently has NO provider-specific cards (Linear/GitHub/Slack are all configured via raw `swarm_config` rows). The dedicated integrations UI is tracked separately in `thoughts/taras/plans/2026-04-21-integrations-ui.md`. For this plan: if the integrations-ui plan has landed by the time Phase 6 runs, add a Jira card there (same `/api/trackers/jira/{authorize,status}` pattern as the Linear card). Otherwise, defer UI work to the integrations-ui plan and surface a note in the docs guide explaining that the current path is to set env vars + hit `/api/trackers/jira/authorize` directly.
+4. **UI (integrations catalog has landed in commit `60a3324`)**: the Linear entry at `new-ui/src/lib/integrations-catalog.ts:313-362` is now the concrete template. Steps:
+   - Add a `"jira"` entry to `INTEGRATIONS` in `new-ui/src/lib/integrations-catalog.ts` mirroring the Linear entry. Fields: `JIRA_CLIENT_ID`, `JIRA_CLIENT_SECRET` (isSecret), `JIRA_SIGNING_SECRET` (isSecret), `JIRA_REDIRECT_URI` (optional). Set `category: "issues"`, `iconKey: "square-check-big"` (or a Jira-appropriate Lucide icon), `disableKey: "JIRA_DISABLE"`, `restartRequired: true`, `specialFlow: "jira-oauth"`.
+   - Extend the `IntegrationSpecialFlow` type union in the same file: `"linear-oauth" | "codex-cli"` → `"linear-oauth" | "jira-oauth" | "codex-cli"`.
+   - Create `new-ui/src/components/integrations/jira-oauth-section.tsx` by copying `linear-oauth-section.tsx` — rename Linear → Jira, swap the status endpoint to `/api/trackers/jira/status`, swap the authorize kickoff to `/api/trackers/jira/authorize`. The Connect/Disconnect UX is identical.
+   - Create a `new-ui/src/api/hooks/use-jira-status.ts` mirroring `use-linear-status.ts` (same shape; hits the Jira status endpoint).
+   - Wire the `specialFlow === "jira-oauth"` dispatch in the integration-details page (`new-ui/src/pages/integrations/[id]/page.tsx`) to render `<JiraOauthSection />` — same switch that currently handles `"linear-oauth"`.
+   - Add any new backend fields the status component needs (e.g., `hasManageWebhookScope`, `webhookIds`) to the Phase 2 `/status` JSON so the UI can show webhook-registered state. No new backend routes required; `src/http/config.ts` already has generic config-patch endpoints that the integrations page consumes.
+   - **PR requirement** per CLAUDE.md: include a `qa-use` session with screenshots of the Jira card's state transitions (disconnected → consent → connected → disconnected).
 5. **CLAUDE.md**: add Jira env vars to the "Key env vars" list in the "Local development" `<important if>` block. Add a note about cloudId storage in the "Architecture invariants" section if needed (single-workspace assumption).
 6. **README / integrations-ui research**: no README change required for v1. If `thoughts/taras/plans/2026-04-21-integrations-ui.md` covers Jira UI cards, cross-reference.
 
@@ -468,3 +541,53 @@ Replace `<YOUR_PROJECT>` with a Jira project key (e.g. `TEST`). Swap `123123` fo
 - `src/linear/*` (the blueprint this plan mirrors)
 - `src/oauth/wrapper.ts` + `src/oauth/ensure-token.ts` + `src/oauth/keepalive.ts` (reused as-is)
 - `src/http/trackers/linear.ts` (route shape to mirror)
+
+## Review Errata
+
+_Reviewed: 2026-04-24 by Claude (autonomy=critical, output=auto-apply). Second pass after file-review comments resolved all remaining items; details below._
+
+### Applied (first pass — mechanical)
+- [x] **I1 — Outbound emoji shortcodes (Phase 4, step 1).** Replaced `:rocket:`, `:white_check_mark:`, `:x:`, `:no_entry:` with Unicode `🚀 ✅ ❌ ⛔` and added a note that Jira REST v2 plaintext bodies do not reliably expand shortcodes.
+- [x] **I5 — Keepalive initial check on boot (Phase 5, step 1).** `startJiraWebhookKeepalive()` now does an immediate expiry check on first invocation instead of waiting 12 hours.
+- [x] **M1 — Auth config on admin routes (Phase 5, steps 3+4).** Made `auth: { apiKey: true }` explicit on `POST /webhook-register` and `DELETE /webhook/:id`.
+
+### Applied (second pass — after file-review)
+
+- [x] **Commit-drift sweep** (file-review comment on title). Checked all commits between the plan's base (`5e550e8`, 2026-04-22) and `HEAD` (2026-04-24). Findings fed back into the plan: migration number shifted from `041` to `043` (commits `b4e39be` → `041_mcp_oauth_tokens`, `6c29daf` → `042_task_context_key`); Phase 1 migration must preserve the new `contextKey` column; Phase 1 now extends `src/tasks/context-key.ts` with a Jira builder; Phase 3 ingress points populate `contextKey`; Phase 6 UI step rewritten against the landed integrations catalog (commit `60a3324`). The per-route `apiKey:false` honoring (`8bb801d`) and centralized secret scrubber (`4b9a155`) are positive no-ops — our existing patterns already match. See the **Commit-drift addendum** below for the full table.
+
+- [x] **Phase 0 — Manual setup** (file-review comment on Implementation Phases header). Added a new Phase 0 covering the Atlassian Developer Console app creation, scope selection, callback URL, app-level signing-secret configuration, bot-user selection, ngrok tunnel for local webhook testing, and `.env` population. Gates Phase 1.
+
+- [x] **Atomicity gap — Phase 3 `handleIssueEvent`.** Inverted the order: insert `tracker_sync` first (UNIQUE-gated via `ON CONFLICT DO NOTHING`), then create the task only if the row was new. A crash between the two leaves an orphan sync row with `NULL swarmId` — reconcilable on retry — instead of an orphan `agent_task`. Also documented transition-to-bot direction filter on the changelog items.
+
+- [x] **I2 — Key Discoveries** subsection added under Desired End State (7 bullets summarizing the reuse story).
+
+- [x] **I3 — Webhook-refresh body shape.** Pinned via Context7 `/websites/developer_atlassian_cloud_jira_platform_rest_v3`: `PUT /rest/api/3/webhook/refresh` takes `{ "webhookIds": [<int>, ...] }` and returns either 200 + `{ "expirationDate": "<ISO-8601>" }` or 204 No Content (docs show both; handle both).
+
+- [x] **I4 — Rate-limiting strategy.** Decision: v1 relies on `jiraFetch`'s existing 429-retry-once + `Retry-After`. Rationale and known limitations documented in Phase 4 step 4 and to be surfaced in the guide's Known limitations section. Per-issue debounce deferred to v2.
+
+- [x] **I6 — `prompt: "consent"` removed** from OAuth `extraParams` (Phase 2 step 4). Atlassian's default behavior (skip consent on subsequent authorizations if scopes haven't changed) is what we want for reconnect UX.
+
+- [x] **I7 — Phase 3 assignee-reassignment now mirrors comment-mention behavior** on a completed/cancelled prior task (creates a `jira.issue.followup` task) and on an in-progress prior task (appends a prompt). No more asymmetry vs `handleCommentEvent`.
+
+- [x] **Webhook signing-secret source of truth.** Docs research revealed `POST /rest/api/3/webhook` has no per-webhook `secret` field — Atlassian signs via the **app-level** signing secret configured in the Developer Console. Phase 0 step 4 now documents where Taras sets it; Phase 5 step 1 dropped the misleading "pass secret as query/header" note.
+
+- [x] **M2 — Scope list.** Atlassian docs still label classic scopes `read:jira-work` / `write:jira-work` / `manage:jira-webhook` as "RECOMMENDED" for v3 webhook endpoints. Keeping classic for v1; granular alternates (`read:webhook:jira`, `write:webhook:jira`, `delete:webhook:jira`, `read:issue:jira`, `write:issue:jira`, `read:comment:jira`, `write:comment:jira`) documented in this errata for a possible future v2 migration.
+
+## Commit-drift addendum (2026-04-22 → 2026-04-24)
+
+Commits between the plan's base (`5e550e8`) and `HEAD` reviewed for impact:
+
+| Commit | Impact on plan |
+|---|---|
+| `b4e39be` feat: OAuth 2.0 MCP support — **migration 041 `mcp_oauth_tokens.sql`** | Our Jira migration can't be 041; shifted to 043. Unrelated code-wise. |
+| `6c29daf` feat(tasks): uniform contextKey — **migration 042 `task_context_key.sql`** | Adds `contextKey` column on `agent_tasks`. Phase 1 rebuild MUST include it; Phase 1 extends `src/tasks/context-key.ts` with a Jira builder; Phase 3 passes `contextKey: buildJiraContextKey(issueKey)` at every `createTaskExtended` call site. |
+| `60a3324` feat(ui): guided Integrations page | Integrations UI has landed — Phase 6 step 4 rewritten against `new-ui/src/lib/integrations-catalog.ts` + `linear-oauth-section.tsx` as a concrete template. |
+| `8bb801d` fix(http): honor per-route `auth:{apiKey:false}` | Phase 2's pattern on OAuth + webhook-receive routes is now properly honored by core middleware. No change — positive no-op. |
+| `4b9a155` feat: centralized secret scrubber | Env-sourced Jira secrets (≥12 chars) are scrubbed automatically from logs. No code change needed; noted in Key Discoveries. |
+| `1afcaa1` fix(mcp): normalize OAuth token_type to capital `Bearer` | Outside Jira scope (MCP OAuth). `jiraFetch` always sends `Authorization: Bearer <token>` regardless of what the token-endpoint returns — Atlassian returns `Bearer` already, so non-issue. |
+| `eac0577`, `897f4d1`, others | Cosmetic / unrelated — no plan impact. |
+
+### Structural notes (informational)
+- Frontmatter had `last_updated_by: claude (post-review)` from a prior pass; this is the second review round, and all items from the first pass are now resolved.
+- Every phase has explicit Automated + Manual Verification and real `bun run …` commands — meets the CLAUDE.md planning rule.
+- Phase numbering after this review: Phase 0 (manual) → Phase 1 → … → Phase 6. Manual E2E section unchanged; covers the full OAuth + inbound + outbound + webhook-register loop.
