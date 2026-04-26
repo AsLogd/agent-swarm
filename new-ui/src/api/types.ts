@@ -80,6 +80,14 @@ export interface AgentTask {
   swarmVersion?: string;
   provider?: ProviderName;
   providerMeta?: DevinProviderMeta | Record<string, never>;
+  attachments?: TaskAttachment[] | null;
+}
+
+export interface TaskAttachment {
+  url: string;
+  type?: "screenshot" | "video" | "file";
+  description?: string;
+  source: "input" | "output";
 }
 
 export type ProviderName = "claude" | "codex" | "pi" | "devin";

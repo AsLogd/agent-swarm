@@ -30,6 +30,7 @@ import type {
   ProviderSession,
   ProviderSessionConfig,
   ProviderTraits,
+  TaskAttachment,
 } from "./types";
 
 /** Default polling interval in milliseconds. */
@@ -68,6 +69,24 @@ const DEVIN_STRUCTURED_OUTPUT_SCHEMA = {
     summary: {
       type: "string",
       description: "A brief summary of what was accomplished.",
+    },
+    attachments: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The full Devin attachment URL" },
+          type: {
+            type: "string",
+            enum: ["screenshot", "video", "file"],
+            description: "Attachment type",
+          },
+          description: { type: "string", description: "What this attachment shows" },
+        },
+        required: ["url"],
+      },
+      description:
+        "URLs to any screenshots, recordings, or files produced during this task. Include all artifacts you created.",
     },
   },
   required: ["status"],
@@ -490,6 +509,7 @@ class DevinSession implements ProviderSession {
     const acusConsumed = response.acus_consumed ?? 0;
     const output = this.formatStructuredOutput();
     const cost = this.buildCostData(acusConsumed, false);
+    const attachments = this.extractAttachments();
 
     this.emit({ type: "progress", message: "completed" });
     this.emitSystemLog("status", {
@@ -509,6 +529,7 @@ class DevinSession implements ProviderSession {
       cost,
       output,
       isError: false,
+      ...(attachments.length > 0 ? { attachments } : {}),
     });
   }
 
@@ -728,6 +749,47 @@ class DevinSession implements ProviderSession {
       // Fall through to raw.
     }
     return this.lastStructuredOutput;
+  }
+
+  // -------------------------------------------------------------------------
+  // Attachment extraction
+  // -------------------------------------------------------------------------
+
+  /**
+   * Extract validated attachments from the last structured output.
+   * Only allows URLs matching the Devin attachments API for security.
+   */
+  private extractAttachments(): TaskAttachment[] {
+    if (!this.lastStructuredOutput) return [];
+    try {
+      const parsed = JSON.parse(this.lastStructuredOutput);
+      if (!parsed || !Array.isArray(parsed.attachments)) return [];
+
+      const ALLOWED_URL_PREFIX = "https://api.devin.ai/v1/attachments/";
+      const attachments: TaskAttachment[] = [];
+
+      for (const item of parsed.attachments) {
+        if (!item || typeof item.url !== "string") continue;
+        if (!item.url.startsWith(ALLOWED_URL_PREFIX)) continue;
+
+        attachments.push({
+          url: item.url,
+          ...(item.type &&
+          typeof item.type === "string" &&
+          ["screenshot", "video", "file"].includes(item.type)
+            ? { type: item.type as "screenshot" | "video" | "file" }
+            : {}),
+          ...(item.description && typeof item.description === "string"
+            ? { description: item.description }
+            : {}),
+          source: "output",
+        });
+      }
+
+      return attachments;
+    } catch {
+      return [];
+    }
   }
 
   // -------------------------------------------------------------------------

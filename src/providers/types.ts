@@ -76,6 +76,14 @@ export interface ProviderSession {
   abort(): Promise<void>;
 }
 
+/** An attachment produced or consumed during a provider session. */
+export interface TaskAttachment {
+  url: string;
+  type?: "screenshot" | "video" | "file";
+  description?: string;
+  source: "input" | "output";
+}
+
 /** Result returned when a provider session completes. */
 export interface ProviderResult {
   exitCode: number;
@@ -86,6 +94,8 @@ export interface ProviderResult {
   errorCategory?: string;
   /** Human-readable failure reason built from error tracking. */
   failureReason?: string;
+  /** Attachments (screenshots, videos, files) produced during the session. */
+  attachments?: TaskAttachment[];
 }
 
 /** Behavioral traits that govern prompt assembly and feature gating. */

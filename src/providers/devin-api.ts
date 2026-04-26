@@ -191,6 +191,26 @@ export async function getSessionMessages(
   return (await res.json()) as DevinMessagesResponse;
 }
 
+/**
+ * Download an attachment file from Devin's CDN.
+ * The Devin API returns a 307 redirect to a presigned URL — we follow it
+ * and return the raw Response so the caller can stream `response.body`.
+ */
+export async function downloadAttachment(
+  apiKey: string,
+  uuid: string,
+  name: string,
+): Promise<Response> {
+  const res = await fetch(`${baseUrl()}/v1/attachments/${uuid}/${name}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    redirect: "follow",
+  });
+  if (!res.ok) {
+    throw new Error(`[devin-api] downloadAttachment failed: HTTP ${res.status}`);
+  }
+  return res;
+}
+
 /** Create a new playbook. */
 export async function createPlaybook(
   orgId: string,
