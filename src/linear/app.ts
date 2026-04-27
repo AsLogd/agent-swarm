@@ -27,9 +27,15 @@ export function initLinear(): boolean {
 
   const clientId = process.env.LINEAR_CLIENT_ID!;
   const clientSecret = process.env.LINEAR_CLIENT_SECRET ?? "";
+  // Boot-time redirect URI gets persisted into oauth_apps.redirectUri and used
+  // verbatim by the OAuth flow. Prefer MCP_BASE_URL over the localhost default
+  // so prod doesn't send users back to localhost when LINEAR_REDIRECT_URI is
+  // unset.
+  const apiBaseUrl =
+    process.env.MCP_BASE_URL?.trim().replace(/\/+$/, "") ||
+    `http://localhost:${process.env.PORT || "3013"}`;
   const redirectUri =
-    process.env.LINEAR_REDIRECT_URI ??
-    `http://localhost:${process.env.PORT || "3013"}/api/trackers/linear/callback`;
+    process.env.LINEAR_REDIRECT_URI ?? `${apiBaseUrl}/api/trackers/linear/callback`;
 
   upsertOAuthApp("linear", {
     clientId,

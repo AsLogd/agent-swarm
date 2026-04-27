@@ -36,9 +36,15 @@ export function initJira(): boolean {
 
   const clientId = process.env.JIRA_CLIENT_ID!;
   const clientSecret = process.env.JIRA_CLIENT_SECRET ?? "";
-  const redirectUri =
-    process.env.JIRA_REDIRECT_URI ??
-    `http://localhost:${process.env.PORT || "3013"}/api/trackers/jira/callback`;
+  // Boot-time redirect URI gets persisted into oauth_apps.redirectUri and used
+  // verbatim by the OAuth flow — so it must match what's registered with
+  // Atlassian. Prefer MCP_BASE_URL over the localhost dev default; in prod
+  // with no JIRA_REDIRECT_URI set, this is what stops Atlassian from sending
+  // the user back to localhost.
+  const apiBaseUrl =
+    process.env.MCP_BASE_URL?.trim().replace(/\/+$/, "") ||
+    `http://localhost:${process.env.PORT || "3013"}`;
+  const redirectUri = process.env.JIRA_REDIRECT_URI ?? `${apiBaseUrl}/api/trackers/jira/callback`;
 
   upsertOAuthApp("jira", {
     clientId,
