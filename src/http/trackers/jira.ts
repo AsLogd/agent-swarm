@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import { getOAuthTokens } from "../../be/db-queries/oauth";
+import { deleteOAuthTokens, getOAuthTokens } from "../../be/db-queries/oauth";
 import { isJiraEnabled } from "../../jira/app";
-import { getJiraMetadata } from "../../jira/metadata";
+import { clearJiraMetadata, getJiraMetadata } from "../../jira/metadata";
 import { getJiraAuthorizationUrl, handleJiraCallback } from "../../jira/oauth";
 import { handleJiraWebhook } from "../../jira/webhook";
 import { deleteJiraWebhook, registerJiraWebhook } from "../../jira/webhook-lifecycle";
 import { route } from "../route-def";
-import { parseQueryParams } from "../utils";
+import { deriveApiBaseUrl, parseQueryParams } from "../utils";
 
 const MANUAL_WEBHOOK_INSTRUCTIONS =
   "See docs-site/.../guides/jira-integration.mdx for manual webhook registration steps.";
@@ -112,15 +112,31 @@ const jiraWebhookDelete = route({
   },
 });
 
+// Admin: full disconnect — delete all registered Atlassian webhooks, drop
+// stored OAuth tokens, and clear cloudId/siteUrl/webhookIds metadata. Atlassian
+// 3LO has no public token revocation endpoint, so the OAuth grant itself must
+// be revoked by the user via id.atlassian.com → Connected apps.
+const jiraDisconnect = route({
+  method: "delete",
+  path: "/api/trackers/jira/disconnect",
+  pattern: ["api", "trackers", "jira", "disconnect"],
+  summary: "Fully disconnect Jira: delete all webhooks, drop tokens, clear metadata",
+  tags: ["Trackers"],
+  responses: {
+    200: { description: "Disconnected" },
+    503: { description: "Jira not configured" },
+  },
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getWebhookBaseUrl(): string {
-  return process.env.MCP_BASE_URL || `http://localhost:${process.env.PORT || "3013"}`;
+function getWebhookUrl(req: IncomingMessage): string {
+  const token = process.env.JIRA_WEBHOOK_TOKEN ?? "<unset>";
+  return `${deriveApiBaseUrl(req)}/api/trackers/jira/webhook/${token}`;
 }
 
-function getWebhookUrl(): string {
-  const token = process.env.JIRA_WEBHOOK_TOKEN ?? "<unset>";
-  return `${getWebhookBaseUrl()}/api/trackers/jira/webhook/${token}`;
+function getRedirectUri(req: IncomingMessage): string {
+  return `${deriveApiBaseUrl(req)}/api/trackers/jira/callback`;
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -218,7 +234,8 @@ export async function handleJiraTracker(
       scope,
       hasManageWebhookScope,
       webhookTokenConfigured: Boolean(process.env.JIRA_WEBHOOK_TOKEN),
-      webhookUrl: getWebhookUrl(),
+      webhookUrl: getWebhookUrl(req),
+      redirectUri: getRedirectUri(req),
       webhookIds: meta.webhookIds ?? [],
     };
 
@@ -324,6 +341,53 @@ export async function handleJiraTracker(
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Webhook delete failed", details: message }));
     }
+    return true;
+  }
+
+  // DELETE /api/trackers/jira/disconnect — full cleanup.
+  if (jiraDisconnect.match(req.method, pathSegments)) {
+    if (!isJiraEnabled()) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Jira integration not configured" }));
+      return true;
+    }
+
+    const meta = getJiraMetadata();
+    const ids = (meta.webhookIds ?? []).map((entry) => entry.id);
+
+    let webhooksDeleted = 0;
+    const webhookFailures: Array<{ id: number; error: string }> = [];
+    for (const id of ids) {
+      try {
+        await deleteJiraWebhook(id);
+        webhooksDeleted++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[Jira] Disconnect: webhook delete failed (id=${id}): ${message}`);
+        webhookFailures.push({ id, error: message });
+      }
+    }
+
+    deleteOAuthTokens("jira");
+    clearJiraMetadata();
+
+    console.log(
+      `[Jira] Disconnected: ${webhooksDeleted}/${ids.length} webhooks deleted, tokens cleared, metadata reset`,
+    );
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        disconnected: true,
+        webhooksDeleted,
+        webhooksTotal: ids.length,
+        webhookFailures,
+        // Atlassian 3LO has no token revocation endpoint — surface this so
+        // the UI can prompt the user to revoke the grant manually if desired.
+        revokeNote:
+          "Atlassian OAuth grants must be revoked manually at https://id.atlassian.com/manage/connected-apps if you want to fully sever the consent.",
+      }),
+    );
     return true;
   }
 

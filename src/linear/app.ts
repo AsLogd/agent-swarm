@@ -43,6 +43,23 @@ export function initLinear(): boolean {
 
   initLinearOutboundSync();
 
+  warnIfMcpBaseUrlLooksLikeAppUrl();
+
   console.log("[Linear] Integration initialized");
   return true;
+}
+
+/**
+ * Soft sanity check for `MCP_BASE_URL`. If it equals `APP_URL` (a common
+ * misconfig that surfaces a wrong-looking webhook URL in the dashboard),
+ * warn loudly so the operator can fix the env.
+ */
+function warnIfMcpBaseUrlLooksLikeAppUrl(): void {
+  const mcp = process.env.MCP_BASE_URL?.trim().replace(/\/+$/, "");
+  const app = process.env.APP_URL?.trim().replace(/\/+$/, "");
+  if (mcp && app && mcp === app) {
+    console.warn(
+      `[Linear] WARNING: MCP_BASE_URL (${mcp}) equals APP_URL — surfaced webhook URL points at the dashboard host, not the API. Configure Linear with this URL only if the dashboard host also serves /api/*.`,
+    );
+  }
 }

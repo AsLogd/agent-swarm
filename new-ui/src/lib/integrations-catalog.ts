@@ -348,14 +348,6 @@ export const INTEGRATIONS: IntegrationDef[] = [
         helpText: "Secret used to verify Linear webhook signatures.",
         affectsRestart: true,
       },
-      {
-        key: "LINEAR_REDIRECT_URI",
-        label: "OAuth redirect URI",
-        type: "text",
-        placeholder: "https://your-swarm.example.com/api/trackers/linear/callback",
-        helpText:
-          "OAuth redirect URI. Must exactly match the value configured on your Linear OAuth app.",
-      },
     ],
   },
 
@@ -399,14 +391,6 @@ export const INTEGRATIONS: IntegrationDef[] = [
         helpText:
           "High-entropy token embedded in the registered webhook URL (Atlassian doesn't HMAC-sign 3LO webhooks). Generate with `openssl rand -hex 32`.",
         affectsRestart: true,
-      },
-      {
-        key: "JIRA_REDIRECT_URI",
-        label: "OAuth redirect URI",
-        type: "text",
-        placeholder: "https://your-swarm.example.com/api/trackers/jira/callback",
-        helpText:
-          "OAuth redirect URI. Must exactly match the callback URL configured on your Atlassian OAuth app.",
       },
     ],
   },

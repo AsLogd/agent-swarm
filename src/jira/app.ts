@@ -60,6 +60,24 @@ export function initJira(): boolean {
   initJiraOutboundSync();
   startJiraWebhookKeepalive();
 
+  warnIfMcpBaseUrlLooksLikeAppUrl();
+
   console.log("[Jira] Integration initialized");
   return true;
+}
+
+/**
+ * Soft sanity check for `MCP_BASE_URL`. If it equals `APP_URL` (a common
+ * misconfig that points the webhook URL at the dashboard host), warn loudly
+ * so the operator can fix the env. We don't fail boot — Atlassian will just
+ * 404 webhook deliveries until corrected.
+ */
+function warnIfMcpBaseUrlLooksLikeAppUrl(): void {
+  const mcp = process.env.MCP_BASE_URL?.trim().replace(/\/+$/, "");
+  const app = process.env.APP_URL?.trim().replace(/\/+$/, "");
+  if (mcp && app && mcp === app) {
+    console.warn(
+      `[Jira] WARNING: MCP_BASE_URL (${mcp}) equals APP_URL — registered webhook URLs will hit the dashboard host, not the API. Atlassian will likely 404 webhook deliveries. Point MCP_BASE_URL at the API server.`,
+    );
+  }
 }

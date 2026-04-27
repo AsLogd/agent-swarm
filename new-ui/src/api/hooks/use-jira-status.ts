@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getConfig } from "@/lib/config";
 
 // ---------------------------------------------------------------------------
@@ -42,10 +42,20 @@ export interface JiraTrackerStatus {
   hasManageWebhookScope: boolean;
   webhookTokenConfigured: boolean;
   webhookUrl: string;
+  /** Computed callback URL — paste into Atlassian app's Authorization callback. */
+  redirectUri: string;
   webhookIds: JiraWebhookEntry[];
   manualWebhookInstructions?: string;
   /** True when GET /status returned 503 — Jira isn't enabled on the server. */
   notConfigured?: boolean;
+}
+
+export interface JiraDisconnectResult {
+  disconnected: boolean;
+  webhooksDeleted: number;
+  webhooksTotal: number;
+  webhookFailures: Array<{ id: number; error: string }>;
+  revokeNote: string;
 }
 
 function getBaseUrl(): string {
@@ -80,6 +90,7 @@ async function fetchJiraStatus(): Promise<JiraTrackerStatus> {
       hasManageWebhookScope: false,
       webhookTokenConfigured: false,
       webhookUrl: "",
+      redirectUri: "",
       webhookIds: [],
       notConfigured: true,
     };
@@ -101,7 +112,32 @@ export function useJiraTrackerStatus() {
   });
 }
 
-/** Absolute authorize URL — callers set `window.location.href = buildJiraAuthorizeUrl()`. */
+/** Absolute authorize URL — callers open it in a new tab via `window.open`. */
 export function buildJiraAuthorizeUrl(): string {
   return `${getBaseUrl()}/api/trackers/jira/authorize`;
+}
+
+/**
+ * Mutation hook for `DELETE /api/trackers/jira/disconnect`. On success, the
+ * status query is invalidated so the card immediately reflects the
+ * disconnected state.
+ */
+export function useDisconnectJira() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<JiraDisconnectResult> => {
+      const res = await fetch(`${getBaseUrl()}/api/trackers/jira/disconnect`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`Disconnect failed (${res.status}): ${text}`);
+      }
+      return (await res.json()) as JiraDisconnectResult;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jira", "tracker", "status"] });
+    },
+  });
 }

@@ -1,16 +1,36 @@
-import { AlertCircle, Check, Copy, ExternalLink, Link as LinkIcon, RefreshCw } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  ExternalLink,
+  Link as LinkIcon,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
-import { buildJiraAuthorizeUrl, useJiraTrackerStatus } from "@/api/hooks/use-jira-status";
+import {
+  buildJiraAuthorizeUrl,
+  useDisconnectJira,
+  useJiraTrackerStatus,
+} from "@/api/hooks/use-jira-status";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
 // ---------------------------------------------------------------------------
 // Jira OAuth connection card — renders above the generic field form.
 //
 // Backend shape: see src/http/trackers/jira.ts handleJiraTracker.
-// Like Linear, Jira has no disconnect endpoint, so we show a "Re-authenticate"
-// fallback. Distinct from Linear: we surface cloudId + siteUrl + webhook count
-// + manage:jira-webhook scope hint for the manual-registration fallback.
 // ---------------------------------------------------------------------------
 
 function formatTokenExpiry(expiry: string | null): string | null {
@@ -20,17 +40,20 @@ function formatTokenExpiry(expiry: string | null): string | null {
   return d.toLocaleString();
 }
 
+type CopyKey = "webhook" | "redirect" | null;
+
 export function JiraOAuthSection() {
   const { data, isLoading, isError, error, refetch, isFetching } = useJiraTrackerStatus();
-  const [copied, setCopied] = useState(false);
+  const disconnect = useDisconnectJira();
+  const [copied, setCopied] = useState<CopyKey>(null);
 
-  async function handleCopyWebhook() {
-    if (!data?.webhookUrl) return;
+  async function handleCopy(key: Exclude<CopyKey, null>, value: string) {
+    if (!value) return;
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
-        await navigator.clipboard.writeText(data.webhookUrl);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        await navigator.clipboard.writeText(value);
+        setCopied(key);
+        setTimeout(() => setCopied((prev) => (prev === key ? null : prev)), 1500);
       }
     } catch {
       // Clipboard unavailable — silent.
@@ -38,7 +61,7 @@ export function JiraOAuthSection() {
   }
 
   function handleAuthorize() {
-    window.location.href = buildJiraAuthorizeUrl();
+    window.open(buildJiraAuthorizeUrl(), "_blank", "noopener,noreferrer");
   }
 
   if (isLoading) {
@@ -84,15 +107,9 @@ export function JiraOAuthSection() {
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
             Jira integration isn't enabled on this server yet. Fill in{" "}
-            <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">JIRA_CLIENT_ID</code>,{" "}
-            <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">
-              JIRA_CLIENT_SECRET
-            </code>
-            , and{" "}
-            <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">
-              JIRA_WEBHOOK_TOKEN
-            </code>{" "}
-            below, save, and restart the API to enable OAuth.
+            <CodeChip>JIRA_CLIENT_ID</CodeChip>, <CodeChip>JIRA_CLIENT_SECRET</CodeChip>, and{" "}
+            <CodeChip>JIRA_WEBHOOK_TOKEN</CodeChip> below, save, and restart the API to enable
+            OAuth.
           </AlertDescription>
         </Alert>
       </section>
@@ -177,6 +194,37 @@ export function JiraOAuthSection() {
           </div>
         </div>
 
+        {/* Redirect URI row */}
+        {data.redirectUri && (
+          <div className="border-t border-border px-4 py-3 space-y-1.5">
+            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Redirect URI
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 font-mono text-xs bg-muted px-2 py-1 rounded truncate">
+                {data.redirectUri}
+              </code>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => handleCopy("redirect", data.redirectUri)}
+                className="shrink-0"
+              >
+                {copied === "redirect" ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+                {copied === "redirect" ? "Copied" : "Copy"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Paste this into your Atlassian app's Authorization callback URL — must match exactly.
+            </p>
+          </div>
+        )}
+
         {/* Webhook URL row */}
         {data.webhookUrl && (
           <div className="border-t border-border px-4 py-3 space-y-1.5">
@@ -191,38 +239,78 @@ export function JiraOAuthSection() {
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={handleCopyWebhook}
+                onClick={() => handleCopy("webhook", data.webhookUrl)}
                 className="shrink-0"
               >
-                {copied ? (
+                {copied === "webhook" ? (
                   <Check className="h-3.5 w-3.5 text-emerald-500" />
                 ) : (
                   <Copy className="h-3.5 w-3.5" />
                 )}
-                {copied ? "Copied" : "Copy"}
+                {copied === "webhook" ? "Copied" : "Copy"}
               </Button>
             </div>
             {data.connected && !data.hasManageWebhookScope ? (
               <p className="text-xs text-muted-foreground">
-                Your OAuth grant lacks the <span className="font-mono">manage:jira-webhook</span>{" "}
-                scope. Register this URL manually in Atlassian's webhook UI, or reconnect with the
-                scope to enable auto-registration.
+                Your OAuth grant lacks the <CodeChip>manage:jira-webhook</CodeChip> scope. Register
+                this URL manually in Atlassian's webhook UI, or reconnect with the scope to enable
+                auto-registration.
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                The swarm auto-registers webhooks via <span className="font-mono">POST</span>{" "}
-                <span className="font-mono">/api/trackers/jira/webhook-register</span> with a JQL
-                filter. Treat this URL like a Slack incoming-webhook URL — keep it private.
+                The swarm auto-registers webhooks via <CodeChip>POST</CodeChip>{" "}
+                <CodeChip>/api/trackers/jira/webhook-register</CodeChip> with a JQL filter. Treat
+                this URL like a Slack incoming-webhook URL — keep it private.
               </p>
             )}
           </div>
         )}
 
-        {/* Footer / refresh + disconnect note */}
+        {/* Footer / refresh + disconnect */}
         <div className="border-t border-border px-4 py-3 flex items-center justify-between gap-3">
-          <p className="text-xs italic text-muted-foreground">
-            Disconnect not available — revoke access in your Atlassian account settings.
-          </p>
+          {data.connected ? (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive-outline"
+                  disabled={disconnect.isPending}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Disconnect Jira?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will delete all {data.webhookIds.length} registered Atlassian webhook
+                    {data.webhookIds.length === 1 ? "" : "s"}, drop stored OAuth credentials, and
+                    clear cloudId / siteUrl metadata. You'll need to reconnect to use Jira again. To
+                    fully revoke the OAuth grant, also remove the app at{" "}
+                    <a
+                      href="https://id.atlassian.com/manage/connected-apps"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline"
+                    >
+                      id.atlassian.com → Connected apps
+                    </a>
+                    .
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => disconnect.mutate()}>
+                    Disconnect
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : (
+            <span className="text-xs text-muted-foreground italic">Not connected.</span>
+          )}
           <Button
             type="button"
             size="sm"
@@ -236,5 +324,13 @@ export function JiraOAuthSection() {
         </div>
       </div>
     </section>
+  );
+}
+
+function CodeChip({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded whitespace-nowrap">
+      {children}
+    </code>
   );
 }
