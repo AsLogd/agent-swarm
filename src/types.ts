@@ -192,6 +192,19 @@ export const AgentTaskSchema = z.object({
   // Provider tracking — which harness provider ran this task
   provider: ProviderNameSchema.optional(),
   providerMeta: z.record(z.string(), z.unknown()).optional(),
+
+  // Attachments (screenshots, videos, files) produced by the provider
+  attachments: z
+    .array(
+      z.object({
+        url: z.string(),
+        type: z.enum(["screenshot", "video", "file"]).optional(),
+        description: z.string().optional(),
+        source: z.enum(["input", "output"]),
+      }),
+    )
+    .nullable()
+    .optional(),
 });
 
 // ============================================================================

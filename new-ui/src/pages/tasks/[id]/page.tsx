@@ -5,11 +5,16 @@ import {
   Ban,
   Box,
   Calendar,
+  Camera,
   CheckCircle2,
   Clock,
   Cpu,
   DollarSign,
+  Download,
   ExternalLink,
+  Eye,
+  EyeOff,
+  FileText,
   FolderOpen,
   GitBranch,
   Github,
@@ -18,6 +23,7 @@ import {
   Hash,
   Key,
   Link2,
+  Paperclip,
   Pause,
   Play,
   Scissors,
@@ -25,9 +31,10 @@ import {
   Terminal,
   Timer,
   User,
+  Video,
   Zap,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import "streamdown/styles.css";
@@ -46,6 +53,7 @@ import type {
   DevinProviderMeta,
   ProviderName,
   SessionCost,
+  TaskAttachment,
   TaskContextResponse,
 } from "@/api/types";
 import { AgentLink } from "@/components/shared/agent-link";
@@ -70,6 +78,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getConfig } from "@/lib/config";
 import { cn, formatRelativeTime, formatSmartTime, normalizeNewlines } from "@/lib/utils";
 
 function logStatusColor(status: string | null | undefined): string {
@@ -196,6 +205,118 @@ function MetaRow({
         <span className="text-xs text-muted-foreground">{label}</span>
       </div>
       <div className="text-sm min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function getAttachmentProxyUrl(taskId: string, attachment: TaskAttachment): string | null {
+  const match = attachment.url.match(/\/attachments\/([^/]+)\/(.+)$/);
+  if (!match) return null;
+  const config = getConfig();
+  const base =
+    import.meta.env.DEV && config.apiUrl === "http://localhost:3013" ? "" : config.apiUrl;
+  return `${base}/api/tasks/${taskId}/attachments/${match[1]}/${match[2]}`;
+}
+
+function attachmentTypeIcon(type?: string) {
+  switch (type) {
+    case "screenshot":
+      return Camera;
+    case "video":
+      return Video;
+    default:
+      return FileText;
+  }
+}
+
+function attachmentFileName(attachment: TaskAttachment): string {
+  const match = attachment.url.match(/\/([^/]+)$/);
+  return match?.[1] ?? "attachment";
+}
+
+function AttachmentRow({ attachment, taskId }: { attachment: TaskAttachment; taskId: string }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const Icon = attachmentTypeIcon(attachment.type);
+  const proxyUrl = getAttachmentProxyUrl(taskId, attachment);
+  const name = attachmentFileName(attachment);
+  const canPreview = attachment.type === "screenshot" || attachment.type === "video";
+
+  const togglePreview = useCallback(async () => {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+      return;
+    }
+    if (!proxyUrl) return;
+    setLoading(true);
+    try {
+      const config = getConfig();
+      const headers: HeadersInit = {};
+      if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+      const res = await fetch(proxyUrl, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      setPreviewUrl(URL.createObjectURL(blob));
+    } catch (err) {
+      console.error("Failed to load attachment preview:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [previewUrl, proxyUrl]);
+
+  if (!proxyUrl) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-xs truncate flex-1" title={attachment.description || name}>
+          {attachment.description || name}
+        </span>
+        {canPreview && (
+          <button
+            type="button"
+            onClick={togglePreview}
+            className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+            title={previewUrl ? "Hide preview" : "Preview"}
+          >
+            {loading ? (
+              <span className="h-3.5 w-3.5 block animate-spin rounded-full border border-muted-foreground border-t-transparent" />
+            ) : previewUrl ? (
+              <EyeOff className="h-3.5 w-3.5" />
+            ) : (
+              <Eye className="h-3.5 w-3.5" />
+            )}
+          </button>
+        )}
+        <a
+          href={proxyUrl}
+          download={name}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+          title="Download"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </a>
+      </div>
+      {previewUrl && attachment.type === "screenshot" && (
+        <img
+          src={previewUrl}
+          alt={attachment.description || name}
+          className="rounded-md border border-border max-w-full max-h-48 object-contain"
+        />
+      )}
+      {previewUrl && attachment.type === "video" && (
+        <video
+          src={previewUrl}
+          controls
+          className="rounded-md border border-border max-w-full max-h-48"
+        >
+          <track kind="captions" />
+        </video>
+      )}
     </div>
   );
 }
@@ -765,6 +886,23 @@ export default function TaskDetailPage() {
         providerMeta={task.providerMeta}
       />
 
+      {task.attachments && task.attachments.length > 0 && (
+        <>
+          <Separator className="my-2" />
+          <CollapsibleSection
+            title={`Attachments (${task.attachments.length})`}
+            icon={Paperclip}
+            defaultOpen
+          >
+            <div className="space-y-2">
+              {task.attachments.map((att, i) => (
+                <AttachmentRow key={att.url || i} attachment={att} taskId={task.id} />
+              ))}
+            </div>
+          </CollapsibleSection>
+        </>
+      )}
+
       {hasEvents && (
         <>
           <Separator className="my-2" />
@@ -821,6 +959,7 @@ export default function TaskDetailPage() {
       logs={sessionLogs}
       compactionSnapshots={contextData?.snapshots}
       className="flex-1 min-h-0"
+      taskId={task.id}
     />
   ) : (
     <div className="flex-1 flex items-center justify-center min-h-0">

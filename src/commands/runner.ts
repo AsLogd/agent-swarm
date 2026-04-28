@@ -531,6 +531,7 @@ export async function ensureTaskFinished(
   exitCode: number,
   failureReason?: string,
   providerOutput?: string,
+  providerAttachments?: string,
 ): Promise<void> {
   const headers: Record<string, string> = {
     "X-Agent-ID": config.agentId,
@@ -581,6 +582,10 @@ export async function ensureTaskFinished(
         body.output = `Process completed (could not verify task state: ${fallback.error})`;
         break;
     }
+  }
+
+  if (providerAttachments) {
+    body.attachments = providerAttachments;
   }
 
   try {
@@ -2140,6 +2145,7 @@ async function checkCompletedProcesses(
         result.exitCode,
         failureReason,
         result.output,
+        result.attachments ? JSON.stringify(result.attachments) : undefined,
       );
 
       ensure({

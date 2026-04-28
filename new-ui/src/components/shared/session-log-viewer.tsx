@@ -1,12 +1,16 @@
 import {
   ArrowDown,
   Brain,
+  Camera,
   Check,
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
+  FileText,
   Scissors,
   Terminal,
+  Video,
   Wrench,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,6 +21,7 @@ import type { ContextSnapshot, SessionLog } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { JsonTree } from "@/components/workflows/json-tree";
 import { useAutoScroll } from "@/hooks/use-auto-scroll";
+import { getConfig } from "@/lib/config";
 import { cn, normalizeNewlines } from "@/lib/utils";
 
 // --- Parsed message types ---
@@ -484,7 +489,7 @@ function ProviderStatusPill({ value }: { value: string }) {
   );
 }
 
-function ProviderMetaBubble({ block }: { block: ProviderMetaBlock }) {
+function ProviderMetaBubble({ block, taskId }: { block: ProviderMetaBlock; taskId?: string }) {
   const label = block.provider.charAt(0).toUpperCase() + block.provider.slice(1);
 
   if (block.kind === "status") {
@@ -508,6 +513,7 @@ function ProviderMetaBubble({ block }: { block: ProviderMetaBlock }) {
     const taskStatus = block.data.taskStatus ? String(block.data.taskStatus) : undefined;
     const output = block.data.output ? String(block.data.output) : undefined;
     const summary = block.data.summary ? String(block.data.summary) : undefined;
+    const attachments = Array.isArray(block.data.attachments) ? block.data.attachments : [];
     return (
       <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 space-y-1.5">
         <div className="flex items-center gap-2">
@@ -522,6 +528,52 @@ function ProviderMetaBubble({ block }: { block: ProviderMetaBlock }) {
             <Streamdown>{normalizeNewlines(output)}</Streamdown>
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {attachments.map((att: Record<string, unknown>, i: number) => {
+              const url = typeof att.url === "string" ? att.url : "";
+              const type = typeof att.type === "string" ? att.type : undefined;
+              const match = url.match(/\/attachments\/([^/]+)\/(.+)$/);
+              const fileName = match?.[2] ?? "attachment";
+              const AttIcon = type === "screenshot" ? Camera : type === "video" ? Video : FileText;
+
+              if (taskId && match) {
+                const config = getConfig();
+                const base =
+                  import.meta.env.DEV && config.apiUrl === "http://localhost:3013"
+                    ? ""
+                    : config.apiUrl;
+                const proxyUrl = `${base}/api/tasks/${taskId}/attachments/${match[1]}/${match[2]}`;
+                return (
+                  <a
+                    key={url || i}
+                    href={proxyUrl}
+                    download={fileName}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-border/50 bg-muted/30 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    title={typeof att.description === "string" ? att.description : fileName}
+                  >
+                    <AttIcon className="h-3 w-3 shrink-0" />
+                    <span className="truncate max-w-[120px]">{fileName}</span>
+                    <Download className="h-2.5 w-2.5 shrink-0" />
+                  </a>
+                );
+              }
+
+              return (
+                <span
+                  key={url || i}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-border/50 bg-muted/30 text-[10px] text-muted-foreground"
+                  title={typeof att.description === "string" ? att.description : fileName}
+                >
+                  <AttIcon className="h-3 w-3 shrink-0" />
+                  <span className="truncate max-w-[120px]">{fileName}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }
@@ -529,7 +581,7 @@ function ProviderMetaBubble({ block }: { block: ProviderMetaBlock }) {
   return null;
 }
 
-function MessageBubble({ message }: { message: ParsedMessage }) {
+function MessageBubble({ message, taskId }: { message: ParsedMessage; taskId?: string }) {
   const isAssistant = message.role === "assistant";
   const isSystem = message.role === "system";
 
@@ -587,7 +639,7 @@ function MessageBubble({ message }: { message: ParsedMessage }) {
             case "tool_result":
               return <ToolResultBubble key={key} content={block.content} />;
             case "provider_meta":
-              return <ProviderMetaBubble key={key} block={block} />;
+              return <ProviderMetaBubble key={key} block={block} taskId={taskId} />;
             default:
               return null;
           }
@@ -651,9 +703,15 @@ interface SessionLogViewerProps {
   logs: SessionLog[];
   compactionSnapshots?: ContextSnapshot[];
   className?: string;
+  taskId?: string;
 }
 
-export function SessionLogViewer({ logs, compactionSnapshots, className }: SessionLogViewerProps) {
+export function SessionLogViewer({
+  logs,
+  compactionSnapshots,
+  className,
+  taskId,
+}: SessionLogViewerProps) {
   const messages = useMemo(() => parseSessionLogs(logs), [logs]);
 
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -740,7 +798,7 @@ export function SessionLogViewer({ logs, compactionSnapshots, className }: Sessi
               return (
                 <div key={msg.id}>
                   {iterationStarts.has(msg.id) && <IterationDivider iteration={msg.iteration} />}
-                  <MessageBubble message={msg} />
+                  <MessageBubble message={msg} taskId={taskId} />
                 </div>
               );
             })}

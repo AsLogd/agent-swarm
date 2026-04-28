@@ -824,6 +824,7 @@ type AgentTaskRow = {
   swarmVersion: string | null;
   provider: string | null;
   providerMeta: string | null;
+  attachments: string | null;
 };
 
 function rowToAgentTask(row: AgentTaskRow): AgentTask {
@@ -887,6 +888,7 @@ function rowToAgentTask(row: AgentTaskRow): AgentTask {
     swarmVersion: row.swarmVersion ?? undefined,
     provider: (row.provider as ProviderName | null) ?? undefined,
     providerMeta: parseProviderMeta(row.provider as ProviderName | null, row.providerMeta),
+    attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
   };
 }
 
@@ -930,6 +932,11 @@ export const taskQueries = {
   setOutput: () =>
     getDb().prepare<AgentTaskRow, [string, string]>(
       "UPDATE agent_tasks SET output = ?, lastUpdatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? RETURNING *",
+    ),
+
+  setAttachments: () =>
+    getDb().prepare<AgentTaskRow, [string, string]>(
+      "UPDATE agent_tasks SET attachments = ?, lastUpdatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? RETURNING *",
     ),
 
   setFailure: () =>
@@ -1561,7 +1568,7 @@ export function findCompletedTaskInThread(
   return row ? rowToAgentTask(row) : null;
 }
 
-export function completeTask(id: string, output?: string): AgentTask | null {
+export function completeTask(id: string, output?: string, attachments?: string): AgentTask | null {
   const oldTask = getTaskById(id);
   const finishedAt = new Date().toISOString();
   let row = taskQueries.updateStatus().get("completed", finishedAt, id);
@@ -1569,6 +1576,10 @@ export function completeTask(id: string, output?: string): AgentTask | null {
 
   if (output) {
     row = taskQueries.setOutput().get(output, id);
+  }
+
+  if (attachments) {
+    row = taskQueries.setAttachments().get(attachments, id);
   }
 
   if (row && oldTask) {

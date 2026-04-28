@@ -153,6 +153,7 @@ const finishTask = route({
     status: z.enum(["completed", "failed"]),
     output: z.string().optional(),
     failureReason: z.string().optional(),
+    attachments: z.string().optional(),
   }),
   auth: { apiKey: true, agentId: true },
   responses: {
@@ -479,6 +480,7 @@ export async function handleTasks(
         const result = completeTask(
           parsed.params.id,
           parsed.body.output || "Completed by runner wrapper (no explicit output)",
+          parsed.body.attachments,
         );
         if (!result) {
           return { error: "Failed to complete task", status: 500 };
