@@ -24,6 +24,9 @@ import type { ProviderEvent } from "./types";
  */
 const SKILL_COMMAND_REGEX = /^@skills:([a-z0-9:_-]+)(?:\s+(.*))?$/;
 
+/** Hard cap on inlined SKILL.md content (100 kB). */
+const MAX_SKILL_CHARS = 100_000;
+
 /**
  * Default skills directory — `plugin/pi-skills/` relative to the project root.
  *
@@ -93,6 +96,14 @@ export async function resolveDevinPrompt(
       content: `[devin] skill resolver: failed to read SKILL.md for @skills:${commandName}: ${message}\n`,
     });
     return prompt;
+  }
+
+  if (skillContent.length > MAX_SKILL_CHARS) {
+    emit?.({
+      type: "raw_stderr",
+      content: `[devin] skill resolver: SKILL.md for @skills:${commandName} exceeds ${MAX_SKILL_CHARS} chars (${skillContent.length}), truncating\n`,
+    });
+    skillContent = skillContent.slice(0, MAX_SKILL_CHARS);
   }
 
   // Assemble the user-request body: trailing args from the @skills: line (if any),

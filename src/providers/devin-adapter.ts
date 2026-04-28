@@ -777,6 +777,9 @@ class DevinSession implements ProviderSession {
 
 export class DevinAdapter implements ProviderAdapter {
   readonly name = "devin";
+  /** Cached from the most recent createSession() for canResume() fallback. */
+  private lastApiKey?: string;
+  private lastOrgId?: string;
   get traits(): ProviderTraits {
     const hasMcp = (process.env.HAS_MCP ?? "").toLowerCase() === "true";
     return { hasMcp, hasLocalEnvironment: false };
@@ -794,6 +797,10 @@ export class DevinAdapter implements ProviderAdapter {
     if (!orgId) {
       throw new Error("[devin] DEVIN_ORG_ID is required. Set it in environment or agent config.");
     }
+
+    // Cache for canResume() which only receives a sessionId.
+    this.lastApiKey = devinApiKey;
+    this.lastOrgId = orgId;
 
     const hasMcp = (env.HAS_MCP ?? process.env.HAS_MCP ?? "").toLowerCase() === "true";
     if (hasMcp) {
@@ -862,8 +869,8 @@ export class DevinAdapter implements ProviderAdapter {
   async canResume(sessionId: string): Promise<boolean> {
     if (!sessionId || typeof sessionId !== "string") return false;
 
-    const devinApiKey = process.env.DEVIN_API_KEY;
-    const orgId = process.env.DEVIN_ORG_ID;
+    const devinApiKey = this.lastApiKey ?? process.env.DEVIN_API_KEY;
+    const orgId = this.lastOrgId ?? process.env.DEVIN_ORG_ID;
     if (!devinApiKey || !orgId) return false;
 
     try {
