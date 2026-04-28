@@ -24,8 +24,7 @@ import type { ProviderEvent } from "./types";
  */
 const SKILL_COMMAND_REGEX = /^@skills:([a-z0-9:_-]+)(?:\s+(.*))?$/;
 
-/** Hard cap on inlined SKILL.md content (100 kB). */
-const MAX_SKILL_CHARS = 100_000;
+const MAX_SKILL_CHARS = Number(process.env.MAX_SKILL_CHARS) || 100_000;
 
 /**
  * Default skills directory — `plugin/pi-skills/` relative to the project root.
