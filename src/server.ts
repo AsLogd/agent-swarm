@@ -17,6 +17,7 @@ import { registerDbQueryTool } from "./tools/db-query";
 import { registerDeleteChannelTool } from "./tools/delete-channel";
 import { registerDeletePageTool } from "./tools/delete-page";
 import { registerGetMetricsTool } from "./tools/get-metrics";
+import { registerGetProjectsTool } from "./tools/get-projects";
 import { registerGetSwarmTool } from "./tools/get-swarm";
 import { registerGetTaskDetailsTool } from "./tools/get-task-details";
 import { registerGetTasksTool } from "./tools/get-tasks";
@@ -54,6 +55,7 @@ import { registerMyAgentInfoTool } from "./tools/my-agent-info";
 import { registerGetOauthAccessTokenTool } from "./tools/oauth-access-token";
 import { registerPollTaskTool } from "./tools/poll-task";
 import { registerPostMessageTool } from "./tools/post-message";
+import { registerProjectLinkTool } from "./tools/project-link";
 // Prompt template tools
 import {
   registerDeletePromptTemplateTool,
@@ -247,6 +249,10 @@ export function createServer(opts: { scriptsOnly?: boolean } = {}) {
   registerStoreProgressTool(server);
   registerMyAgentInfoTool(server);
   registerCancelTaskTool(server);
+
+  // Projects - grouping entity over tasks/sessions/docs (always registered)
+  registerGetProjectsTool(server);
+  registerProjectLinkTool(server);
 
   // User identity tools - always registered
   registerResolveUserTool(server);

@@ -188,6 +188,14 @@ declare module "swarm-sdk" {
       externalId: string;
       provider?: string;
     }): Promise<unknown>;
+    // --- projects ---
+    project_list(args?: {
+      owner?: string;
+      phase?: "draft" | "designing" | "planning" | "implementing" | "done" | "archived";
+      q?: string;
+      limit?: number;
+      offset?: number;
+    }): Promise<unknown>;
 
     // --- write: memory ---
     memory_delete(args: { id: string }): Promise<unknown>;
@@ -214,6 +222,13 @@ declare module "swarm-sdk" {
     task_send(args: Record<string, unknown>): Promise<unknown>;
     task_cancel(args: { taskId: string }): Promise<unknown>;
     task_action(args: Record<string, unknown>): Promise<unknown>;
+
+    // --- write: projects ---
+    project_link(args: {
+      action: "link" | "unlink";
+      taskId: string;
+      projectId?: string;
+    }): Promise<unknown>;
 
     // --- write: config ---
     config_set(args: {

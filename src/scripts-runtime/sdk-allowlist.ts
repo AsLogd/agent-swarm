@@ -142,6 +142,10 @@ export const SDK_TOOL_NAME_MAP = {
   page_delete: "delete-page", // destructive
   metric_create: "create_metric",
 
+  // ── projects ──
+  project_list: "get-projects",
+  project_link: "project-link",
+
   // ── human input ──
   request_humanInput: "request-human-input",
 } as const;
