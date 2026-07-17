@@ -66,6 +66,9 @@ const SKIP_AUTO_RESUME_TYPES = new Set([
   "boot-triage",
   "heartbeat",
   "reroute-decision",
+  // Control-plane lead decision task from the project auto-link sweep — never
+  // resume a crashed one; the sweep re-proposes on its next cycle.
+  "project-autolink",
 ]);
 
 // ============================================================================

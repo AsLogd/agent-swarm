@@ -625,6 +625,13 @@ httpServer
       startHeartbeat(heartbeatMs);
     }
 
+    // Start project auto-link sweep (unless disabled — the function also
+    // checks PROJECT_AUTOLINK_DISABLE itself)
+    if (process.env.PROJECT_AUTOLINK_DISABLE !== "true") {
+      const { startProjectAutolinkSweep } = await import("../heartbeat");
+      startProjectAutolinkSweep();
+    }
+
     // Start OAuth token keepalive (proactive refresh to prevent expiry)
     if (process.env.OAUTH_KEEPALIVE_DISABLE !== "true") {
       const { startOAuthKeepalive } = await import("../oauth/keepalive");
@@ -663,6 +670,15 @@ httpServer
       .then(({ runBootReembedScripts }) => runBootReembedScripts())
       .catch((err) => {
         console.error("[boot-reembed-scripts] startup backfill failed (non-fatal):", err);
+      });
+
+    // Background backfill: embed any projects missing embeddings (created
+    // pre-migration-118 or while no embedding key was configured). Feeds the
+    // project auto-link sweep's candidate index. Non-blocking, idempotent.
+    import("../be/projects/boot-reembed")
+      .then(({ runBootReembedProjects }) => runBootReembedProjects())
+      .catch((err) => {
+        console.error("[boot-reembed-projects] startup backfill failed (non-fatal):", err);
       });
 
     // One-time scrub: retroactively redact any session_logs rows containing
