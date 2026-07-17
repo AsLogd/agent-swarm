@@ -48,6 +48,8 @@ interface TaskFormData {
   dependsOn: string[];
   modelTier: string;
   effort: string;
+  /** Projects deep-link (`?new=true&projectId=`): link the created task to this project. */
+  projectId: string;
 }
 
 const emptyTaskForm: TaskFormData = {
@@ -59,6 +61,7 @@ const emptyTaskForm: TaskFormData = {
   dependsOn: [],
   modelTier: "",
   effort: "",
+  projectId: "",
 };
 
 function CreateTaskDialog({
@@ -317,6 +320,7 @@ export default function TasksPage() {
   const statusFilter = searchParams.get("status") ?? "all";
   const agentFilter = searchParams.get("agent") ?? "all";
   const scheduleFilter = searchParams.get("schedule") ?? "all";
+  const projectFilter = searchParams.get("projectId") ?? "";
   const searchParam = searchParams.get("search") ?? "";
   const includeHeartbeat = searchParams.get("heartbeat") === "true";
   const page = searchParams.has("page") ? Number(searchParams.get("page")) : 0;
@@ -370,6 +374,7 @@ export default function TasksPage() {
       status?: string;
       agentId?: string;
       scheduleId?: string;
+      projectId?: string;
       search?: string;
       includeHeartbeat?: boolean;
       limit: number;
@@ -381,10 +386,20 @@ export default function TasksPage() {
     if (statusFilter !== "all") f.status = statusFilter;
     if (agentFilter !== "all") f.agentId = agentFilter;
     if (scheduleFilter !== "all") f.scheduleId = scheduleFilter;
+    if (projectFilter) f.projectId = projectFilter;
     if (searchParam) f.search = searchParam;
     if (includeHeartbeat) f.includeHeartbeat = true;
     return f;
-  }, [statusFilter, agentFilter, scheduleFilter, searchParam, includeHeartbeat, page, pageSize]);
+  }, [
+    statusFilter,
+    agentFilter,
+    scheduleFilter,
+    projectFilter,
+    searchParam,
+    includeHeartbeat,
+    page,
+    pageSize,
+  ]);
 
   const { data: tasksData, isLoading } = useTasks(filters);
   const createTask = useCreateTask();
@@ -422,6 +437,12 @@ export default function TasksPage() {
       } else {
         setDialogInitialValues({
           ...(searchParams.get("agentId") ? { agentId: searchParams.get("agentId") ?? "" } : {}),
+          // Projects deep-link (`?new=true&projectId=`): pre-link the created
+          // task. The param is NOT stripped below — it doubles as the list
+          // filter so the page shows the project's tasks behind the dialog.
+          ...(searchParams.get("projectId")
+            ? { projectId: searchParams.get("projectId") ?? "" }
+            : {}),
         });
       }
       setDialogOpen(true);
@@ -452,6 +473,7 @@ export default function TasksPage() {
       ...(data.dependsOn.length > 0 && { dependsOn: data.dependsOn }),
       ...(data.modelTier && { modelTier: data.modelTier }),
       ...(data.effort && { effort: data.effort }),
+      ...(data.projectId && { projectId: data.projectId }),
       // Phase 3: attribute the task to the current identity. `source` is left
       // unset so the server's "api" default applies.
       ...(currentUserId && { requestedByUserId: currentUserId }),
@@ -464,6 +486,7 @@ export default function TasksPage() {
     statusFilter !== "all" ||
     agentFilter !== "all" ||
     scheduleFilter !== "all" ||
+    projectFilter !== "" ||
     searchParam !== "" ||
     includeHeartbeat ||
     page !== 0;

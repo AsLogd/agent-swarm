@@ -167,6 +167,10 @@ export interface AgentTask {
   requestedByUserId?: string;
   /** Phase 1 (≥1.76.0): cross-ingress context key for the conversation/thread. */
   contextKey?: string;
+  /** Projects (≥1.120.0): project this task chain is linked to. */
+  projectId?: string;
+  /** Projects (≥1.120.0): how the task got its project link. */
+  projectLinkProvenance?: ProjectLinkProvenance;
   /** Pointer-based artifacts attached to the task, when included by the API response. */
   attachments?: TaskAttachment[];
 }
@@ -415,6 +419,60 @@ export interface InboxStateUpsertResponse {
   item: InboxItemState;
 }
 
+/**
+ * Projects (≥1.120.0). Mirrors `ProjectSchema` / `ProjectPhaseSchema` /
+ * `ProjectLinkProvenanceSchema` in `src/types.ts` (keep enums in sync with the
+ * SQL CHECK constraints in migration 117).
+ */
+export const PROJECT_PHASES = [
+  "draft",
+  "designing",
+  "planning",
+  "implementing",
+  "done",
+  "archived",
+] as const;
+export type ProjectPhase = (typeof PROJECT_PHASES)[number];
+
+/**
+ * How a task got linked to a project:
+ * - `created` — task born from the project (UI/API pass-through at creation)
+ * - `propagated` — inherited from the parent task at spawn time
+ * - `lead` — linked by the lead auto-link sweep decision
+ * - `manual` — user-initiated link from the UI/API
+ */
+export type ProjectLinkProvenance = "created" | "propagated" | "lead" | "manual";
+
+export interface Project {
+  id: string;
+  title: string;
+  goal?: string;
+  description?: string;
+  ownerUserId?: string;
+  phase: ProjectPhase;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectsListResponse {
+  projects: Project[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ProjectDocumentsResponse {
+  documents: TaskAttachment[];
+}
+
+export interface ProjectLinkResponse {
+  success: boolean;
+  projectId: string;
+  taskId: string;
+  linkedTasks?: number;
+  unlinkedTasks?: number;
+}
+
 export type FavoriteItemType = "page" | "workflow" | "schedule";
 
 export interface UserFavorite {
@@ -486,6 +544,8 @@ export interface CredentialMissingAgentsResponse {
 
 export interface SessionsListResponse {
   sessions: SessionListItem[];
+  /** Filter-aware total (same WHERE as the list). Present on ≥1.76 servers. */
+  total?: number;
 }
 
 /**

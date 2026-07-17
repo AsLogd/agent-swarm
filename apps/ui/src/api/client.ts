@@ -57,6 +57,12 @@ import type {
   PricingResponse,
   PricingRow,
   PricingTokenClass,
+  Project,
+  ProjectDocumentsResponse,
+  ProjectLinkProvenance,
+  ProjectLinkResponse,
+  ProjectPhase,
+  ProjectsListResponse,
   PromptTemplate,
   PromptTemplateHistory,
   ReasoningEffortLevel,
@@ -291,6 +297,8 @@ class ApiClient {
     orderBy?: "lastUpdatedAt" | "createdAt";
     /** Filter to tasks whose `source` is in this list. Empty/undefined → all. */
     source?: string[];
+    /** Projects (≥1.120.0): only tasks linked to this project. */
+    projectId?: string;
   }): Promise<TasksResponse> {
     const params = new URLSearchParams();
     if (filters?.status) params.set("status", filters.status);
@@ -307,6 +315,7 @@ class ApiClient {
     if (filters?.orderBy) params.set("orderBy", filters.orderBy);
     if (filters?.source && filters.source.length > 0)
       params.set("source", filters.source.join(","));
+    if (filters?.projectId) params.set("projectId", filters.projectId);
     const queryString = params.toString();
     const url = `${this.getBaseUrl()}/api/tasks${queryString ? `?${queryString}` : ""}`;
     const res = await fetch(url, { headers: this.getHeaders() });
@@ -337,6 +346,8 @@ class ApiClient {
     requestedByUserId?: string;
     /** Phase 3 (≥1.76.0): cross-ingress conversation/thread context key. */
     contextKey?: string;
+    /** Projects (≥1.120.0): link the new root task to this project (provenance `created`). */
+    projectId?: string;
     model?: string;
     modelTier?: string;
     effort?: string;
@@ -2242,19 +2253,38 @@ class ApiClient {
     q?: string;
     /** When set, restrict results to sessions owned by this user. NULL rows are excluded. */
     requestedByUserId?: string;
+    /** Projects (≥1.120.0): only sessions whose ROOT task is linked to this project. */
+    projectId?: string;
   }): Promise<SessionListItem[]> {
+    const data = await this.listSessionsPaged(opts);
+    return data.sessions;
+  }
+
+  /**
+   * Same as `listSessions` but returns the full paged envelope (`sessions` +
+   * filter-aware `total`). Used where the caller needs the count (e.g. the
+   * Projects surface panels).
+   */
+  async listSessionsPaged(opts?: {
+    limit?: number;
+    offset?: number;
+    source?: string[];
+    q?: string;
+    requestedByUserId?: string;
+    projectId?: string;
+  }): Promise<SessionsListResponse> {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set("limit", String(opts.limit));
     if (opts?.offset != null) params.set("offset", String(opts.offset));
     if (opts?.source && opts.source.length > 0) params.set("source", opts.source.join(","));
     if (opts?.q && opts.q.length > 0) params.set("q", opts.q);
     if (opts?.requestedByUserId) params.set("requestedByUserId", opts.requestedByUserId);
+    if (opts?.projectId) params.set("projectId", opts.projectId);
     const qs = params.toString();
     const url = `${this.getBaseUrl()}/api/sessions${qs ? `?${qs}` : ""}`;
     const res = await fetch(url, { headers: this.getHeaders() });
     if (!res.ok) throw new Error(`Failed to list sessions: ${res.status}`);
-    const data = (await res.json()) as SessionsListResponse;
-    return data.sessions;
+    return (await res.json()) as SessionsListResponse;
   }
 
   async getSession(rootTaskId: string): Promise<SessionDetailResponse> {
@@ -2540,6 +2570,116 @@ class ApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`setFavorite: ${res.status}`);
+    return res.json();
+  }
+
+  // ─── Projects (≥1.120.0) ───────────────────────────────────────────────────
+
+  async listProjects(opts?: {
+    owner?: string;
+    phase?: ProjectPhase;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<ProjectsListResponse> {
+    const params = new URLSearchParams();
+    if (opts?.owner) params.set("owner", opts.owner);
+    if (opts?.phase) params.set("phase", opts.phase);
+    if (opts?.q) params.set("q", opts.q);
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    if (opts?.offset != null) params.set("offset", String(opts.offset));
+    const qs = params.toString();
+    const url = `${this.getBaseUrl()}/api/projects${qs ? `?${qs}` : ""}`;
+    const res = await fetch(url, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error(`listProjects: ${res.status}`);
+    return res.json();
+  }
+
+  async getProject(id: string): Promise<Project> {
+    const url = `${this.getBaseUrl()}/api/projects/${encodeURIComponent(id)}`;
+    const res = await fetch(url, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error(`getProject ${id}: ${res.status}`);
+    return res.json();
+  }
+
+  async createProject(body: {
+    title: string;
+    goal?: string;
+    description?: string;
+    ownerUserId?: string;
+    phase?: ProjectPhase;
+  }): Promise<Project> {
+    const url = `${this.getBaseUrl()}/api/projects`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: "Failed to create project" }));
+      throw new Error(error.error || `createProject: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async updateProject(
+    id: string,
+    body: {
+      title?: string;
+      goal?: string | null;
+      description?: string | null;
+      ownerUserId?: string | null;
+      phase?: ProjectPhase;
+    },
+  ): Promise<Project> {
+    const url = `${this.getBaseUrl()}/api/projects/${encodeURIComponent(id)}`;
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: "Failed to update project" }));
+      throw new Error(error.error || `updateProject ${id}: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  /** Links the task AND all its descendants to the project (chain semantics). */
+  async linkProjectTask(
+    projectId: string,
+    taskId: string,
+    provenance?: ProjectLinkProvenance,
+  ): Promise<ProjectLinkResponse> {
+    const url = `${this.getBaseUrl()}/api/projects/${encodeURIComponent(projectId)}/links`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: this.getHeaders(),
+      body: JSON.stringify({ taskId, ...(provenance ? { provenance } : {}) }),
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: "Failed to link task" }));
+      throw new Error(error.error || `linkProjectTask: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  /** Removes the project link from the task AND all its descendants. */
+  async unlinkProjectTask(projectId: string, taskId: string): Promise<ProjectLinkResponse> {
+    const url = `${this.getBaseUrl()}/api/projects/${encodeURIComponent(projectId)}/links/${encodeURIComponent(taskId)}`;
+    const res = await fetch(url, { method: "DELETE", headers: this.getHeaders() });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: "Failed to unlink task" }));
+      throw new Error(error.error || `unlinkProjectTask: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  /** Derived docs view: `task_attachments` joined through project-linked tasks, deduped. */
+  async listProjectDocuments(projectId: string): Promise<ProjectDocumentsResponse> {
+    const url = `${this.getBaseUrl()}/api/projects/${encodeURIComponent(projectId)}/documents`;
+    const res = await fetch(url, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error(`listProjectDocuments ${projectId}: ${res.status}`);
     return res.json();
   }
 

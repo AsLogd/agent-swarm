@@ -25,6 +25,8 @@ export interface TaskFilters {
   orderBy?: "lastUpdatedAt" | "createdAt";
   /** Filter to tasks whose `source` is in this list. Empty/undefined → all. */
   source?: string[];
+  /** Projects (≥1.120.0): only tasks linked to this project. */
+  projectId?: string;
 }
 
 export interface UseTasksOptions {
@@ -35,6 +37,8 @@ export interface UseTasksOptions {
    * flashes their whole view back to its loading state.
    */
   keepPreviousData?: boolean;
+  /** Disable the query entirely (e.g. while a required filter is unresolved). */
+  enabled?: boolean;
 }
 
 export function useTasks(filters?: TaskFilters, opts?: UseTasksOptions) {
@@ -42,6 +46,7 @@ export function useTasks(filters?: TaskFilters, opts?: UseTasksOptions) {
     queryKey: ["tasks", filters],
     queryFn: () => api.fetchTasks(filters),
     select: (data) => ({ tasks: data.tasks, total: data.total }),
+    enabled: opts?.enabled ?? true,
     ...(opts?.keepPreviousData ? { placeholderData: keepPreviousData } : {}),
   });
 }
@@ -94,6 +99,8 @@ interface CreateTaskInput {
   requestedByUserId?: string;
   /** Phase 3 (≥1.76.0): cross-ingress conversation/thread context key. */
   contextKey?: string;
+  /** Projects (≥1.120.0): link the new root task to this project (provenance `created`). */
+  projectId?: string;
   model?: string;
   modelTier?: string;
   effort?: string;
@@ -113,6 +120,7 @@ function matchesTaskFilters(task: AgentTask, filters?: TaskFilters): boolean {
   if (filters.status && task.status !== filters.status) return false;
   if (filters.agentId && task.agentId !== filters.agentId) return false;
   if (filters.scheduleId && task.scheduleId !== filters.scheduleId) return false;
+  if (filters.projectId && task.projectId !== filters.projectId) return false;
   if (filters.createdAfter && task.createdAt < filters.createdAfter) return false;
   if (filters.createdBefore && task.createdAt >= filters.createdBefore) return false;
   if (filters.source && filters.source.length > 0 && !filters.source.includes(task.source)) {
@@ -230,6 +238,8 @@ function optimisticCreatedTask(input: CreateTaskInput): TaskWithLogs {
     parentTaskId: input.parentTaskId,
     requestedByUserId: input.requestedByUserId,
     contextKey: input.contextKey,
+    projectId: input.projectId,
+    ...(input.projectId ? { projectLinkProvenance: "created" as const } : {}),
     logs: [],
     attachments: [],
   };

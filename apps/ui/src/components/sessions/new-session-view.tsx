@@ -5,10 +5,12 @@
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { FolderKanban } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api/client";
+import { useProject } from "@/api/hooks/use-projects";
 import { useTaskTemplates } from "@/api/hooks/use-task-templates";
 import { Badge } from "@/components/ui/badge";
 import { useCurrentUser } from "@/contexts/current-user-context";
@@ -25,7 +27,16 @@ const SUGGESTIONS = [
   "Draft a tech-spec for a feature idea",
 ];
 
-export function NewSessionView() {
+export function NewSessionView({
+  projectId,
+}: {
+  /**
+   * Projects (≥1.120.0): when set (e.g. `/sessions?projectId=` from a project
+   * detail page's "Start session"), the created root task is linked to the
+   * project with provenance `created` — the whole follow-up chain inherits it.
+   */
+  projectId?: string;
+} = {}) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { userId } = useCurrentUser();
@@ -36,6 +47,7 @@ export function NewSessionView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const prefillTemplateId = searchParams.get("prefill");
   const seedText = searchParams.get("seed");
+  const { data: linkedProject } = useProject(projectId);
 
   // ?seed=<text> — home page's "what do you have in mind?" shortcut forwards
   // typed text directly. Strip the param so refreshing doesn't re-seed.
@@ -72,6 +84,7 @@ export function NewSessionView() {
         task: input.task,
         requestedByUserId: input.requestedByUserId,
         source: "ui",
+        ...(projectId ? { projectId } : {}),
       });
       const uploadResult = await uploadComposeAttachments({
         taskId: created.id,
@@ -122,6 +135,12 @@ export function NewSessionView() {
             Describe a goal. The lead agent picks it up, spawns the right crew, and chains the
             follow-ups under one session.
           </p>
+          {projectId ? (
+            <Badge variant="outline" className="gap-1.5 px-3 py-1 font-normal normal-case">
+              <FolderKanban className="h-3 w-3 shrink-0 text-muted-foreground" />
+              Linked to project{linkedProject?.title ? `: ${linkedProject.title}` : ""}
+            </Badge>
+          ) : null}
           <div className="flex flex-wrap items-center justify-center gap-2">
             {SUGGESTIONS.map((s) => (
               <button

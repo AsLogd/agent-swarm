@@ -543,6 +543,13 @@ export interface TasksTableProps {
    */
   pagination?: boolean;
   paginationQueryKey?: string;
+  /**
+   * Caller-supplied columns appended after the built-in set (e.g. the project
+   * detail page's provenance badge + unlink action). Not part of the
+   * visibility menu — always shown. Interactive cell content must call
+   * `e.stopPropagation()` (or rely on `ignoreRowClickFromInteractives`).
+   */
+  trailingColumns?: ColDef<AgentTask>[];
 }
 
 export function TasksTable({
@@ -555,6 +562,7 @@ export function TasksTable({
   domLayout,
   pagination,
   paginationQueryKey,
+  trailingColumns,
 }: TasksTableProps) {
   // Build a `userId → User` lookup for the "Requested by" column. We skip the
   // network call entirely on swarms that don't support the column — the
@@ -718,8 +726,9 @@ export function TasksTable({
       },
     ];
 
-    return all.filter((c) => !columns.isHidden(c._id)).map(({ _id, ...col }) => col);
-  }, [agentNameById, columns, userById]);
+    const visible = all.filter((c) => !columns.isHidden(c._id)).map(({ _id, ...col }) => col);
+    return trailingColumns ? [...visible, ...trailingColumns] : visible;
+  }, [agentNameById, columns, userById, trailingColumns]);
 
   return (
     <DataGrid

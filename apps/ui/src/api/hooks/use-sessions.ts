@@ -24,6 +24,8 @@ export interface UseSessionsOptions {
   q?: string;
   /** When set, restrict results to sessions owned by this user. */
   requestedByUserId?: string;
+  /** Projects (≥1.120.0): only sessions whose ROOT task is linked to this project. */
+  projectId?: string;
   /** Disable the query entirely (e.g. when user identity is not yet resolved). */
   enabled?: boolean;
 }
@@ -34,10 +36,11 @@ export function useSessions(options?: UseSessionsOptions) {
   const source = options?.source;
   const q = options?.q;
   const requestedByUserId = options?.requestedByUserId;
+  const projectId = options?.projectId;
   const enabled = options?.enabled ?? true;
   return useQuery({
-    queryKey: ["sessions", { limit, offset, source, q, requestedByUserId }],
-    queryFn: () => api.listSessions({ limit, offset, source, q, requestedByUserId }),
+    queryKey: ["sessions", { limit, offset, source, q, requestedByUserId, projectId }],
+    queryFn: () => api.listSessions({ limit, offset, source, q, requestedByUserId, projectId }),
     enabled,
   });
 }
