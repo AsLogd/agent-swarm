@@ -221,6 +221,18 @@ export const PERMISSIONS = {
     description: "Delete an external script API endpoint.",
     namespace: "script",
   },
+  "project.create": {
+    description: "Create a project.",
+    namespace: "project",
+  },
+  "project.update": {
+    description: "Update a project's metadata or lifecycle phase.",
+    namespace: "project",
+  },
+  "project.link": {
+    description: "Link or unlink a task chain to/from a project.",
+    namespace: "project",
+  },
 } as const satisfies Record<string, { description: string; namespace: string }>;
 
 export type PermissionVerb = keyof typeof PERMISSIONS;

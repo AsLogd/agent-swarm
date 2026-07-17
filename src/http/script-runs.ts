@@ -85,6 +85,8 @@ const agentTaskBodySchema = z.object({
   model: z.string().min(1).optional(),
   parentTaskId: z.string().uuid().optional(),
   requestedByUserId: z.string().optional(),
+  /** Link the created task to a project (provenance 'created'). */
+  projectId: z.string().uuid().optional(),
   outputSchema: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -532,6 +534,7 @@ export async function handleScriptRuns(
         model: parsed.body.model,
         parentTaskId: parsed.body.parentTaskId,
         requestedByUserId: parsed.body.requestedByUserId ?? run.requestedByUserId,
+        projectId: parsed.body.projectId,
         outputSchema: parsed.body.outputSchema,
         contextKey,
       });

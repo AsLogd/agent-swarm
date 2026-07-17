@@ -1747,6 +1747,8 @@ export interface TaskFilters {
   createdBefore?: string;
   /** Only return tasks requested by this canonical user. NULL rows are excluded. */
   requestedByUserId?: string;
+  /** Only return tasks linked to this project (any provenance). NULL rows are excluded. */
+  projectId?: string;
   /** Sort list rows for either table freshness or timeline paging. */
   orderBy?: "lastUpdatedAt" | "createdAt";
   limit?: number;
@@ -1848,6 +1850,11 @@ export function getAllTasks(
   if (filters?.requestedByUserId) {
     conditions.push("requestedByUserId = ?");
     params.push(filters.requestedByUserId);
+  }
+
+  if (filters?.projectId) {
+    conditions.push("projectId = ?");
+    params.push(filters.projectId);
   }
 
   // Exclude system/heartbeat tasks by default. The flag is still called
@@ -1982,6 +1989,11 @@ export function getTasksCount(filters?: Omit<TaskFilters, "limit" | "readyOnly">
   if (filters?.requestedByUserId) {
     conditions.push("requestedByUserId = ?");
     params.push(filters.requestedByUserId);
+  }
+
+  if (filters?.projectId) {
+    conditions.push("projectId = ?");
+    params.push(filters.projectId);
   }
 
   // Exclude system/heartbeat tasks by default. The flag is still called
@@ -12415,6 +12427,12 @@ interface ListRecentSessionsOpts {
   q?: string;
   /** When set, restrict to root tasks where `requestedByUserId` equals this value. NULL rows are excluded. */
   requestedByUserId?: string;
+  /**
+   * When set, restrict to sessions whose ROOT task is linked to this project.
+   * Root-only semantics (Projects plan, Decision 1) — a chain whose root is
+   * unlinked does not match even if a descendant carries the projectId.
+   */
+  projectId?: string;
   /** When true, return slim `SessionListItemSummary` rows (default: full). */
   slim?: boolean;
 }
@@ -12448,6 +12466,10 @@ export function listRecentSessions(
   if (requestedByUserId) {
     conditions.push("r.requestedByUserId = ?");
     params.push(requestedByUserId);
+  }
+  if (opts?.projectId) {
+    conditions.push("r.projectId = ?");
+    params.push(opts.projectId);
   }
   params.push(limit, offset);
 
@@ -12522,7 +12544,7 @@ export function listRecentSessions(
  * a plain count, no recursive chain walk needed.
  */
 export function countSessions(
-  opts?: Pick<ListRecentSessionsOpts, "source" | "q" | "requestedByUserId">,
+  opts?: Pick<ListRecentSessionsOpts, "source" | "q" | "requestedByUserId" | "projectId">,
 ): number {
   const sources = opts?.source?.filter((s) => s.length > 0) ?? [];
   const q = opts?.q?.trim();
@@ -12542,6 +12564,10 @@ export function countSessions(
   if (requestedByUserId) {
     conditions.push("requestedByUserId = ?");
     params.push(requestedByUserId);
+  }
+  if (opts?.projectId) {
+    conditions.push("projectId = ?");
+    params.push(opts.projectId);
   }
 
   const row = getDb()
@@ -12792,6 +12818,40 @@ export function unlinkTaskChain(taskId: string): number {
     )
     .run(taskId);
   return result.changes;
+}
+
+/**
+ * Project "documents" = `task_attachments` joined through project-linked tasks
+ * (Projects plan, Decision 4 — no separate doc registry). Chain-wide: any task
+ * carrying the projectId contributes its attachments, whatever the provenance.
+ *
+ * Dedup (same artifact registered from multiple tasks): newest-first, keyed by
+ * `sha256` when present, else by `(provider_id, provider_key)` when a provider
+ * key exists, else the row id (never collapsed).
+ */
+export function listProjectDocuments(projectId: string): TaskAttachment[] {
+  const rows = getDb()
+    .prepare<TaskAttachmentRow, [string]>(
+      `SELECT ta.* FROM task_attachments ta
+       JOIN agent_tasks t ON t.id = ta.task_id
+       WHERE t.projectId = ?
+       ORDER BY ta.created_at DESC, ta.rowid DESC`,
+    )
+    .all(projectId);
+
+  const seen = new Set<string>();
+  const documents: TaskAttachment[] = [];
+  for (const row of rows) {
+    const dedupKey = row.sha256
+      ? `sha256:${row.sha256}`
+      : row.provider_key
+        ? `provider:${row.provider_id ?? ""}:${row.provider_key}`
+        : `id:${row.id}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    documents.push(rowToTaskAttachment(row));
+  }
+  return documents;
 }
 
 // ============================================================================

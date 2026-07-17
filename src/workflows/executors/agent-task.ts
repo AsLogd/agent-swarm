@@ -26,6 +26,8 @@ const AgentTaskConfigSchema = z.object({
   effort: ReasoningEffortSchema.optional(),
   parentTaskId: z.string().uuid().optional(),
   requestedByUserId: z.string().optional(),
+  /** Link the created task to a project (provenance 'created'). */
+  projectId: z.string().uuid().optional(),
   outputSchema: z.record(z.string(), z.unknown()).optional(),
   followUpConfig: FollowUpConfigSchema.optional(),
 });
@@ -108,6 +110,7 @@ export class AgentTaskExecutor extends BaseExecutor<
         effort: config.effort,
         parentTaskId: config.parentTaskId,
         requestedByUserId: config.requestedByUserId ?? meta.requestedByUserId,
+        projectId: config.projectId,
         outputSchema: config.outputSchema,
         followUpConfig: config.followUpConfig,
         contextKey: workflowContextKey({ workflowRunId: meta.runId }),

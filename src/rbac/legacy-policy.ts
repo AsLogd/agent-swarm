@@ -194,4 +194,9 @@ export const LEGACY_POLICY = {
   "script.api.update": leadOnly,
   "script.api.rotate": leadOnly,
   "script.api.delete": leadOnly,
+  // Projects are owned-but-visible-to-all (Projects plan, brainstorm decision):
+  // any authenticated principal may create/update/link.
+  "project.create": anyAuthenticated,
+  "project.update": anyAuthenticated,
+  "project.link": anyAuthenticated,
 } as const satisfies Record<PermissionVerb, LegacyRule>;

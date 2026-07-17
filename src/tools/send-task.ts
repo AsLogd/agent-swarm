@@ -124,6 +124,13 @@ export const sendTaskInputSchema = z
       .describe(
         "ID of the human user who originally requested this task chain. When omitted, inherited from the caller's current task so the attribution flows through multi-hop delegation automatically.",
       ),
+    projectId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "Project to link the new task to (provenance 'created'). When omitted, the task inherits the parent task's project automatically — only set this to start a NEW project-linked chain or to override the inherited project.",
+      ),
     followUpConfig: FollowUpConfigSchema.optional().describe(
       "Control the lead follow-up created when this task finishes. When to use `followUpConfig`: set `disabled: true` when you'll wait for this task to complete inline and no follow-up is needed; set `onCompleted` / `onFailed` with specific instructions when you need to follow up effectively on a particular outcome of a long-running flow; for normal one-shot tasks, leave it unset because defaults are fine. It is most valuable for long-running / complex flows.",
     ),
@@ -207,6 +214,7 @@ export async function sendTaskHandler(
     slackUserId,
     overrideSlackContext,
     requestedByUserId: inputRequestedByUserId,
+    projectId,
     followUpConfig,
   }: SendTaskArgs,
 ): Promise<CallToolResult> {
@@ -434,6 +442,7 @@ export async function sendTaskHandler(
         slackThreadTs,
         slackUserId,
         overrideSlackContext,
+        projectId,
         followUpConfig,
         // Only meaningful here: a pool task's routingAffinity gates
         // claimTask/autoAssignPoolTasks. offer/direct-assign below bypass the
@@ -503,6 +512,7 @@ export async function sendTaskHandler(
         slackThreadTs,
         slackUserId,
         overrideSlackContext,
+        projectId,
         followUpConfig,
       });
       transferTrackerSyncToResumeChild({
@@ -539,6 +549,7 @@ export async function sendTaskHandler(
       slackThreadTs,
       slackUserId,
       overrideSlackContext,
+      projectId,
       followUpConfig,
     });
     transferTrackerSyncToResumeChild({

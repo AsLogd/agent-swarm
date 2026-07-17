@@ -95,6 +95,9 @@ const ANY_AUTHENTICATED_VERBS: PermissionVerb[] = [
   "task.create.own",
   "favorite.write.own",
   "script.search",
+  "project.create",
+  "project.update",
+  "project.link",
 ];
 
 const REQUESTER_OWNS_TASK_VERBS: PermissionVerb[] = [

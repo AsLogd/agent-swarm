@@ -68,6 +68,8 @@ const listTasks = route({
     createdBefore: z.string().datetime().optional(),
     /** Comma-separated source filter (e.g. `ui,slack`). Omit to include all. */
     source: z.string().optional(),
+    /** Only return tasks linked to this project (any provenance). */
+    projectId: z.string().optional(),
     /** `createdAt` enables stable time-axis paging; default preserves table freshness ordering. */
     orderBy: z.enum(["lastUpdatedAt", "createdAt"]).optional(),
     limit: z.coerce.number().int().optional(),
@@ -102,6 +104,8 @@ const createTask = route({
     outputSchema: z.record(z.string(), z.unknown()).optional(),
     contextKey: z.string().optional(),
     requestedByUserId: z.string().optional(),
+    /** Link the new task (root ingress) to a project — provenance `created`. */
+    projectId: z.string().optional(),
     model: z.string().optional(),
     modelTier: ModelTierSchema.optional(),
     effort: ReasoningEffortSchema.optional(),
@@ -356,6 +360,7 @@ export async function handleTasks(
       createdAfter: parsed.query.createdAfter || undefined,
       createdBefore: parsed.query.createdBefore || undefined,
       source,
+      projectId: parsed.query.projectId || undefined,
       orderBy: parsed.query.orderBy,
       limit: parsed.query.limit,
       offset: parsed.query.offset,
@@ -438,6 +443,9 @@ export async function handleTasks(
         outputSchema: parsed.body.outputSchema || undefined,
         contextKey: parsed.body.contextKey || undefined,
         requestedByUserId,
+        // Explicit projectId defaults its provenance to 'created' in
+        // createTaskExtended (root-ingress pass-through, Projects plan Phase 2).
+        projectId: parsed.body.projectId || undefined,
         ...splitLegacyModelAlias({
           model: parsed.body.model,
           modelTier: parsed.body.modelTier,
