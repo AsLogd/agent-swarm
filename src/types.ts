@@ -310,6 +310,45 @@ export const AgentTaskSourceSchema = z.enum([
 export type AgentTaskSource = z.infer<typeof AgentTaskSourceSchema>;
 
 // ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+// Keep both enums in sync with the SQL CHECK constraints in
+// `src/be/migrations/117_projects.sql` (same convention as
+// `AgentTaskSourceSchema` above).
+
+export const ProjectPhaseSchema = z.enum([
+  "draft",
+  "designing",
+  "planning",
+  "implementing",
+  "done",
+  "archived",
+]);
+export type ProjectPhase = z.infer<typeof ProjectPhaseSchema>;
+
+/**
+ * How a task got linked to a project:
+ * - `created` — task born from the project (UI/API pass-through at creation)
+ * - `propagated` — inherited from the parent task at spawn time
+ * - `lead` — linked by the lead auto-link sweep decision
+ * - `manual` — user-initiated link from the UI/API
+ */
+export const ProjectLinkProvenanceSchema = z.enum(["created", "propagated", "lead", "manual"]);
+export type ProjectLinkProvenance = z.infer<typeof ProjectLinkProvenanceSchema>;
+
+export const ProjectSchema = z.object({
+  id: z.uuid(),
+  title: z.string().min(1),
+  goal: z.string().optional(),
+  description: z.string().optional(),
+  ownerUserId: z.string().optional(),
+  phase: ProjectPhaseSchema.default("draft"),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type Project = z.infer<typeof ProjectSchema>;
+
+// ---------------------------------------------------------------------------
 // Harness Provider
 // ---------------------------------------------------------------------------
 // String identifiers accepted by `HARNESS_PROVIDER` and the
@@ -442,6 +481,12 @@ export const AgentTaskSchema = z.object({
 
   // Schedule linking (optional — set when task was created by a schedule)
   scheduleId: z.uuid().optional(),
+
+  // Project linkage (optional — most tasks are unlinked; NULL stays valid
+  // everywhere). Children inherit the parent's projectId at spawn time with
+  // provenance 'propagated' (see `createTaskExtended` in src/be/db.ts).
+  projectId: z.uuid().optional(),
+  projectLinkProvenance: ProjectLinkProvenanceSchema.optional(),
 
   // Workflow linking (optional — set when task was created by a workflow)
   workflowRunId: z.string().uuid().nullable().optional(),
@@ -1777,6 +1822,8 @@ export type AgentTaskSummary = Pick<
   | "acceptedAt"
   | "parentTaskId"
   | "scheduleId"
+  | "projectId"
+  | "projectLinkProvenance"
   | "model"
   | "modelTier"
   | "effort"

@@ -62,6 +62,9 @@ import type {
   PricingProvider,
   PricingRow,
   PricingTokenClass,
+  Project,
+  ProjectLinkProvenance,
+  ProjectPhase,
   PromptTemplate,
   PromptTemplateHistory,
   ProviderName,
@@ -1119,6 +1122,8 @@ type AgentTaskRow = {
   modelTier: string | null;
   effort: string | null;
   scheduleId: string | null;
+  projectId: string | null;
+  projectLinkProvenance: string | null;
   workflowRunId: string | null;
   workflowRunStepId: string | null;
   outputSchema: string | null;
@@ -1235,6 +1240,8 @@ function rowToAgentTask(row: AgentTaskRow): AgentTask {
       ? (row.effort as ReasoningEffort)
       : undefined,
     scheduleId: row.scheduleId ?? undefined,
+    projectId: row.projectId ?? undefined,
+    projectLinkProvenance: (row.projectLinkProvenance as ProjectLinkProvenance | null) ?? undefined,
     workflowRunId: row.workflowRunId ?? undefined,
     workflowRunStepId: row.workflowRunStepId ?? undefined,
     outputSchema: row.outputSchema ? JSON.parse(row.outputSchema) : undefined,
@@ -1290,6 +1297,8 @@ function rowToAgentTaskSummary(row: AgentTaskRow): AgentTaskSummary {
     acceptedAt: t.acceptedAt,
     parentTaskId: t.parentTaskId,
     scheduleId: t.scheduleId,
+    projectId: t.projectId,
+    projectLinkProvenance: t.projectLinkProvenance,
     model: t.model,
     modelTier: t.modelTier,
     effort: t.effort,
@@ -3809,6 +3818,14 @@ export interface CreateTaskOptions {
   modelTier?: ModelTier;
   effort?: ReasoningEffort;
   scheduleId?: string;
+  /**
+   * Project linkage. When unset and `parentTaskId` is set, the child inherits
+   * the parent's `projectId` with provenance `'propagated'`. An explicit
+   * `projectId` defaults its provenance to `'created'` when
+   * `projectLinkProvenance` is not provided.
+   */
+  projectId?: string;
+  projectLinkProvenance?: ProjectLinkProvenance;
   workflowRunId?: string;
   workflowRunStepId?: string;
   sourceTaskId?: string;
@@ -4026,6 +4043,14 @@ export function createTaskExtended(task: string, options?: CreateTaskOptions): A
       if (parent.routingAffinity && !options.routingAffinity) {
         options.routingAffinity = parent.routingAffinity;
       }
+
+      // Project linkage — the whole spawn chain stays attached to the parent's
+      // project (provenance 'propagated'). An explicit projectId wins and
+      // defaults its provenance to 'created' at the INSERT below.
+      if (parent.projectId && !options.projectId) {
+        options.projectId = parent.projectId;
+        options.projectLinkProvenance = options.projectLinkProvenance ?? "propagated";
+      }
     }
   }
 
@@ -4126,8 +4151,9 @@ export function createTaskExtended(task: string, options?: CreateTaskOptions): A
         vcsInstallationId, vcsNodeId,
         agentmailInboxId, agentmailMessageId, agentmailThreadId,
         mentionMessageId, mentionChannelId, dir, parentTaskId, model, modelTier, effort, scheduleId,
+        projectId, projectLinkProvenance,
         workflowRunId, workflowRunStepId, outputSchema, followUpConfig, requestedByUserId, contextKey, routingAffinity, swarmVersion, createdAt, lastUpdatedAt, created_by, updated_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     )
     .get(
       id,
@@ -4166,6 +4192,13 @@ export function createTaskExtended(task: string, options?: CreateTaskOptions): A
       options?.modelTier ?? null,
       options?.effort ?? null,
       options?.scheduleId ?? null,
+      options?.projectId ?? null,
+      // Explicit projectId without an explicit provenance = born from the
+      // project ('created'). Inherited links arrive here already stamped
+      // 'propagated' by the inheritance block above. No projectId → no
+      // provenance (the CHECK allows NULL only alongside a NULL projectId
+      // semantically; we never persist a dangling provenance).
+      options?.projectId ? (options.projectLinkProvenance ?? "created") : null,
       options?.workflowRunId ?? null,
       options?.workflowRunStepId ?? null,
       options?.outputSchema ? JSON.stringify(options.outputSchema) : null,
@@ -12517,6 +12550,248 @@ export function countSessions(
     )
     .get(...params);
   return row?.count ?? 0;
+}
+
+// ============================================================================
+// Projects — CRUD + task-chain link/unlink
+// ----------------------------------------------------------------------------
+// A Project groups tasks (and therefore sessions + docs) around a body of
+// work. Tasks carry a nullable `projectId` + `projectLinkProvenance`
+// (migration 117); children inherit the parent's project at spawn time via
+// `createTaskExtended`'s inheritance block. Link/unlink operates on the whole
+// descendant chain of the given task (Projects plan, Decision 5).
+// ============================================================================
+
+type ProjectRow = {
+  id: string;
+  title: string;
+  goal: string | null;
+  description: string | null;
+  ownerUserId: string | null;
+  phase: string;
+  createdAt: string;
+  updatedAt: string;
+  created_by: string | null;
+  updated_by: string | null;
+};
+
+function rowToProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    title: row.title,
+    goal: row.goal ?? undefined,
+    description: row.description ?? undefined,
+    ownerUserId: row.ownerUserId ?? undefined,
+    phase: row.phase as ProjectPhase,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function createProject(data: {
+  title: string;
+  goal?: string;
+  description?: string;
+  ownerUserId?: string;
+  phase?: ProjectPhase;
+}): Project {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const auditUserId = getCurrentRequestUserId() ?? null;
+  const row = getDb()
+    .prepare<ProjectRow, (string | null)[]>(
+      `INSERT INTO projects (id, title, goal, description, ownerUserId, phase, createdAt, updatedAt, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+    )
+    .get(
+      id,
+      data.title,
+      data.goal ?? null,
+      data.description ?? null,
+      data.ownerUserId ?? null,
+      data.phase ?? "draft",
+      now,
+      now,
+      auditUserId,
+      auditUserId,
+    );
+  if (!row) throw new Error("Failed to create project");
+  return rowToProject(row);
+}
+
+export function getProjectById(id: string): Project | null {
+  const row = getDb().prepare<ProjectRow, [string]>("SELECT * FROM projects WHERE id = ?").get(id);
+  return row ? rowToProject(row) : null;
+}
+
+export interface ListProjectsOpts {
+  /** Filter to projects where `ownerUserId` equals this value. */
+  owner?: string;
+  phase?: ProjectPhase;
+  /** Case-insensitive substring match against title / goal / description. */
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function listProjects(opts?: ListProjectsOpts): Project[] {
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (opts?.owner) {
+    conditions.push("ownerUserId = ?");
+    params.push(opts.owner);
+  }
+  if (opts?.phase) {
+    conditions.push("phase = ?");
+    params.push(opts.phase);
+  }
+  const q = opts?.q?.trim();
+  if (q && q.length > 0) {
+    conditions.push(
+      "(lower(title) LIKE ? OR lower(COALESCE(goal, '')) LIKE ? OR lower(COALESCE(description, '')) LIKE ?)",
+    );
+    const needle = `%${q.toLowerCase()}%`;
+    params.push(needle, needle, needle);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  params.push(opts?.limit ?? 50, opts?.offset ?? 0);
+
+  return getDb()
+    .prepare<ProjectRow, (string | number)[]>(
+      `SELECT * FROM projects ${where} ORDER BY updatedAt DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params)
+    .map(rowToProject);
+}
+
+export function countProjects(opts?: Pick<ListProjectsOpts, "owner" | "phase" | "q">): number {
+  const conditions: string[] = [];
+  const params: string[] = [];
+
+  if (opts?.owner) {
+    conditions.push("ownerUserId = ?");
+    params.push(opts.owner);
+  }
+  if (opts?.phase) {
+    conditions.push("phase = ?");
+    params.push(opts.phase);
+  }
+  const q = opts?.q?.trim();
+  if (q && q.length > 0) {
+    conditions.push(
+      "(lower(title) LIKE ? OR lower(COALESCE(goal, '')) LIKE ? OR lower(COALESCE(description, '')) LIKE ?)",
+    );
+    const needle = `%${q.toLowerCase()}%`;
+    params.push(needle, needle, needle);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const row = getDb()
+    .prepare<{ count: number }, string[]>(`SELECT COUNT(*) AS count FROM projects ${where}`)
+    .get(...params);
+  return row?.count ?? 0;
+}
+
+export function updateProject(
+  id: string,
+  data: Partial<{
+    title: string;
+    goal: string | null;
+    description: string | null;
+    ownerUserId: string | null;
+    phase: ProjectPhase;
+  }>,
+): Project | null {
+  const sets: string[] = [];
+  const params: (string | null)[] = [];
+
+  if (data.title !== undefined) {
+    sets.push("title = ?");
+    params.push(data.title);
+  }
+  if (data.goal !== undefined) {
+    sets.push("goal = ?");
+    params.push(data.goal);
+  }
+  if (data.description !== undefined) {
+    sets.push("description = ?");
+    params.push(data.description);
+  }
+  if (data.ownerUserId !== undefined) {
+    sets.push("ownerUserId = ?");
+    params.push(data.ownerUserId);
+  }
+  if (data.phase !== undefined) {
+    sets.push("phase = ?");
+    params.push(data.phase);
+  }
+
+  if (sets.length === 0) return getProjectById(id);
+
+  sets.push("updatedAt = ?", "updated_by = ?");
+  params.push(new Date().toISOString(), getCurrentRequestUserId() ?? null);
+  params.push(id);
+
+  const row = getDb()
+    .prepare<ProjectRow, (string | null)[]>(
+      `UPDATE projects SET ${sets.join(", ")} WHERE id = ? RETURNING *`,
+    )
+    .get(...params);
+  return row ? rowToProject(row) : null;
+}
+
+/**
+ * Link `taskId` AND all of its descendants to `projectId` (Decision 5: link/
+ * unlink operates on the task's whole descendant chain — linking a root links
+ * the session). Overwrites any previous link on those rows. Deliberately does
+ * NOT bump `lastUpdatedAt`: linking is out-of-band metadata, and rewriting the
+ * chain's activity timestamps would reorder the sessions list and corrupt its
+ * latest-status aggregation.
+ *
+ * Returns the number of tasks updated (0 when `taskId` doesn't exist). Throws
+ * on a nonexistent `projectId` (FK constraint).
+ */
+export function linkTaskChainToProject(
+  taskId: string,
+  projectId: string,
+  provenance: ProjectLinkProvenance = "manual",
+): number {
+  const result = getDb()
+    .prepare(
+      `WITH RECURSIVE chain(id) AS (
+         SELECT id FROM agent_tasks WHERE id = ?
+         UNION ALL
+         SELECT t.id FROM agent_tasks t
+         JOIN chain c ON t.parentTaskId = c.id
+       )
+       UPDATE agent_tasks SET projectId = ?, projectLinkProvenance = ?
+       WHERE id IN (SELECT id FROM chain)`,
+    )
+    .run(taskId, projectId, provenance);
+  return result.changes;
+}
+
+/**
+ * Remove the project link from `taskId` AND all of its descendants (both
+ * `projectId` and `projectLinkProvenance` go NULL). Returns the number of
+ * tasks updated.
+ */
+export function unlinkTaskChain(taskId: string): number {
+  const result = getDb()
+    .prepare(
+      `WITH RECURSIVE chain(id) AS (
+         SELECT id FROM agent_tasks WHERE id = ?
+         UNION ALL
+         SELECT t.id FROM agent_tasks t
+         JOIN chain c ON t.parentTaskId = c.id
+       )
+       UPDATE agent_tasks SET projectId = NULL, projectLinkProvenance = NULL
+       WHERE id IN (SELECT id FROM chain)`,
+    )
+    .run(taskId);
+  return result.changes;
 }
 
 // ============================================================================
