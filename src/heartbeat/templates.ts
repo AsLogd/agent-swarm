@@ -54,6 +54,37 @@ Goal: Review system status and your standing orders, take action if needed.
 });
 
 // ============================================================================
+// Project auto-link decision (periodic sweep proposal)
+// ============================================================================
+
+registerTemplate({
+  eventType: "project.autolink.decision",
+  header: "",
+  defaultBody: `Task Type: Project Auto-Link Decision
+Goal: Decide whether recently started, unlinked work belongs to an existing project.
+
+## Candidates [auto-generated]
+A periodic sweep compared new unlinked root tasks against project descriptions (embedding similarity). Similarity scores are a coarse signal for candidate GENERATION only — they are NOT an auto-link verdict. You make the call.
+
+{{candidates}}
+
+## Instructions
+1. For each task above, review what it actually is (\`get-task-details\`) and what the candidate project is about (\`get-projects\`).
+2. If a task clearly belongs to a project, link it: \`project-link\` with \`action: "link"\`, the task id, and the project id. Linking moves the task AND its whole descendant chain; provenance is recorded as \`lead\` automatically.
+3. If a match is wrong or uncertain, do nothing for that task — an unlinked task is a valid, safe state. Never link on the score alone.
+4. Do NOT create follow-up tasks or another auto-link task — the sweep re-runs on its own schedule.
+5. Complete this task with a one-line verdict per candidate (linked / ignored + why).`,
+  variables: [
+    {
+      name: "candidates",
+      description:
+        "Auto-generated markdown list of (task, project, similarity) candidate pairs to triage",
+    },
+  ],
+  category: "event",
+});
+
+// ============================================================================
 // Boot triage (one-off after container restart)
 // ============================================================================
 

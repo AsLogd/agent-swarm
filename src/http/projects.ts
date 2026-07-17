@@ -13,6 +13,7 @@ import {
   unlinkTaskChain,
   updateProject,
 } from "../be/db";
+import { embedProject, projectTrackedFieldsChanged } from "../be/projects/embeddings";
 import { can, type PermissionVerb, type RbacPrincipal } from "../rbac";
 import { ProjectLinkProvenanceSchema, ProjectPhaseSchema } from "../types";
 import { getRequestAuth } from "../utils/request-auth-context";
@@ -237,6 +238,11 @@ export async function handleProjects(
         ownerUserId,
         phase: parsed.body.phase,
       });
+      // Fire-and-forget: feeds the auto-link sweep's candidate index; no-ops
+      // when no embedding provider is configured.
+      void embedProject(project).catch((err) => {
+        console.error(`[project-embed] create hook failed for ${project.id}:`, err);
+      });
       json(res, project, 201);
     } catch (error) {
       // FK violation (unknown ownerUserId) is the only expected failure here.
@@ -307,10 +313,22 @@ export async function handleProjects(
     if (!parsed) return true;
     if (!checkProjectPermission(req, res, myAgentId, "project.update")) return true;
     try {
+      const prev = getProjectById(parsed.params.id);
+      if (!prev) {
+        jsonError(res, "Project not found", 404);
+        return true;
+      }
       const project = updateProject(parsed.params.id, parsed.body);
       if (!project) {
         jsonError(res, "Project not found", 404);
         return true;
+      }
+      // Re-embed only when a tracked field (title/goal/description) changed —
+      // phase/owner edits don't alter the matching text.
+      if (projectTrackedFieldsChanged(prev, project)) {
+        void embedProject(project).catch((err) => {
+          console.error(`[project-embed] update hook failed for ${project.id}:`, err);
+        });
       }
       json(res, project);
     } catch (error) {
