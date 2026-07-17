@@ -27,6 +27,11 @@ const listSessions = route({
      * excluded. Omit to return every session (legacy / non-UI callers).
      */
     requestedByUserId: z.string().min(1).optional(),
+    /**
+     * When present, restrict results to sessions whose ROOT task is linked to
+     * this project (root-only semantics — descendants' links don't count).
+     */
+    projectId: z.string().min(1).optional(),
     /** `full` restores the legacy shape (full root `AgentTask`); default is slim. */
     fields: z.enum(["full", "slim"]).optional(),
   }),
@@ -75,18 +80,20 @@ export async function handleSessions(
       source: sources,
       q: parsed.query.q,
       requestedByUserId: parsed.query.requestedByUserId,
+      projectId: parsed.query.projectId,
     };
     // List responses default to slim (root is a task summary); `?fields=full` restores it.
     const sessions =
       parsed.query.fields === "full"
         ? listRecentSessions(baseOpts)
         : listRecentSessions({ ...baseOpts, slim: true });
-    // Filter-aware total: same `source`/`q`/`requestedByUserId` WHERE as the
-    // list query, so the UI pager reflects the filtered result set.
+    // Filter-aware total: same `source`/`q`/`requestedByUserId`/`projectId`
+    // WHERE as the list query, so the UI pager reflects the filtered result set.
     const total = countSessions({
       source: sources,
       q: parsed.query.q,
       requestedByUserId: parsed.query.requestedByUserId,
+      projectId: parsed.query.projectId,
     });
     json(res, {
       sessions,

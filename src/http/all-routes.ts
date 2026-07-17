@@ -37,6 +37,7 @@ import "./pages-public";
 import "./prompt-templates";
 import "./poll";
 import "./pricing";
+import "./projects";
 import "./repos";
 import "./schedules";
 import "./script-connections";

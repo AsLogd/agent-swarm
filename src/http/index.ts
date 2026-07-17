@@ -77,6 +77,7 @@ import { handlePages } from "./pages";
 import { handlePagesPublic } from "./pages-public";
 import { handlePoll } from "./poll";
 import { handlePricing } from "./pricing";
+import { handleProjects } from "./projects";
 import { handlePromptTemplates } from "./prompt-templates";
 import { handleRepos } from "./repos";
 import { describeRequestRoute } from "./route-def";
@@ -315,6 +316,7 @@ const httpServer = createHttpServer(async (req, res) => {
         () => handleStatus(req, res, pathSegments, queryParams),
         () => handleActiveSessions(req, res, pathSegments, queryParams, myAgentId),
         () => handlePricing(req, res, pathSegments, queryParams, myAgentId),
+        () => handleProjects(req, res, pathSegments, queryParams, myAgentId),
         () => handleSchedules(req, res, pathSegments, queryParams, myAgentId),
         () => handleWorkflows(req, res, pathSegments, queryParams, myAgentId),
         () => handleWorkflowEvents(req, res, pathSegments, queryParams),
