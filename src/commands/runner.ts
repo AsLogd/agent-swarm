@@ -2271,6 +2271,10 @@ interface Trigger {
   }>;
   cursorUpdates?: Array<{ channelId: string; ts: string }>; // Deferred cursor commits for channel_activity
   requestedBy?: { name: string; email?: string; role?: string; notes?: string };
+  // Projects Phase 4 — attached by /api/poll alongside the task (all three
+  // task-shaped triggers) when the outgoing task carries a projectId. Feeds
+  // the `task.project.context` per-task prompt section; no extra HTTP call.
+  project?: { id: string; title: string; goal?: string; description?: string; phase: string };
   // Phase 4 — budget_refused fields. The server emits this envelope from
   // /api/poll and MCP task-action accept when an admission gate refuses to
   // let the agent claim a task. Worker reads cause + reset/spend/budget for
@@ -2308,6 +2312,41 @@ export async function buildRequesterProfilePrompt(
     requester_name: requestedBy.name,
     requester_role_suffix: requestedBy.role ? ` (${requestedBy.role})` : "",
     requester_notes_section: notesSection,
+  });
+
+  return result.skipped ? "" : result.text.trim();
+}
+
+type ProjectContext = NonNullable<Trigger["project"]>;
+
+/**
+ * Cap for the project description embedded in the per-task system prompt.
+ * Keeps the `task.project.context` section a small, fixed-cost slice of the
+ * BOOTSTRAP_TOTAL_MAX_CHARS budget (see src/prompts/base-prompt.ts).
+ */
+const PROJECT_DESCRIPTION_MAX_CHARS = 1_200;
+
+export async function buildProjectContextPrompt(
+  project: ProjectContext | undefined,
+): Promise<string> {
+  if (!project?.id || !project.title) return "";
+
+  const goal = project.goal?.trim();
+  const goalSection = goal ? `\nGoal: ${goal}` : "";
+
+  const description = project.description?.trim();
+  const cappedDescription =
+    description && description.length > PROJECT_DESCRIPTION_MAX_CHARS
+      ? `${description.slice(0, PROJECT_DESCRIPTION_MAX_CHARS)}…`
+      : description;
+  const descriptionSection = cappedDescription ? `\nDescription: ${cappedDescription}` : "";
+
+  const result = await resolveTemplateAsync("task.project.context", {
+    project_id: project.id,
+    project_title: project.title,
+    project_phase: project.phase,
+    project_goal_section: goalSection,
+    project_description_section: descriptionSection,
   });
 
   return result.skipped ? "" : result.text.trim();
@@ -4185,6 +4224,9 @@ export async function runAgent(config: RunnerConfig, opts: RunnerOptions) {
   let currentRepoContext: BasePromptArgs["repoContext"] | undefined;
   // Slack context for current task (gates Slack instructions in prompt)
   let currentTaskSlackContext: BasePromptArgs["slackContext"] | undefined;
+  // Project context for current task (Projects Phase 4) — set from the poll
+  // trigger's `project` enrichment; feeds the task.project.context section
+  let currentTaskProjectContext: ProjectContext | undefined;
 
   // Generate base prompt (identity fields injected after profile fetch below).
   // Traits are read fresh on each call so a live adapter swap (Section 4)
@@ -5370,6 +5412,11 @@ export async function runAgent(config: RunnerConfig, opts: RunnerOptions) {
           ? { channelId: taskSlackChannelId, threadTs: taskSlackThreadTs }
           : undefined;
 
+        // Project context (Projects Phase 4): set from the trigger enrichment
+        // when the task is project-linked, reset otherwise so a later
+        // unlinked task never inherits a stale project section.
+        currentTaskProjectContext = trigger.project;
+
         // Handle repo context for tasks with vcsRepo (GitHub/GitLab)
         const taskVcsRepo = (trigger.task as { vcsRepo?: string } | undefined)?.vcsRepo;
         if (taskVcsRepo && apiUrl) {
@@ -5460,7 +5507,13 @@ export async function runAgent(config: RunnerConfig, opts: RunnerOptions) {
         // Rebuild system prompt with per-task repo context
         const taskBasePrompt = await buildSystemPrompt();
         const requesterProfilePrompt = await buildRequesterProfilePrompt(trigger.requestedBy);
-        const taskPromptParts = [taskBasePrompt, requesterProfilePrompt, additionalSystemPrompt]
+        const projectContextPrompt = await buildProjectContextPrompt(currentTaskProjectContext);
+        const taskPromptParts = [
+          taskBasePrompt,
+          requesterProfilePrompt,
+          projectContextPrompt,
+          additionalSystemPrompt,
+        ]
           .filter((part): part is string => Boolean(part))
           .join("\n\n");
         const taskSystemPrompt = taskPromptParts + cwdWarning;

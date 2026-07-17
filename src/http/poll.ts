@@ -16,6 +16,7 @@ import {
   getInboxSummary,
   getOfferedTasksForAgent,
   getPendingTaskForAgent,
+  getProjectById,
   getTaskAttachments,
   getTaskById,
   getUnassignedTaskIdsForAgent,
@@ -109,6 +110,28 @@ function attachmentsForTrigger(
   }));
 }
 
+/**
+ * Slim project projection for poll triggers — attached alongside the task in
+ * every task-shaped trigger (assigned / claimed / offered) when the outgoing
+ * task carries a `projectId`. Mirrors the `requestedBy` enrichment: one DB
+ * read inside the existing poll path, so the worker can render the
+ * `task.project.context` prompt section without an extra HTTP call.
+ */
+function projectForTrigger(
+  projectId: string | null | undefined,
+): { id: string; title: string; goal?: string; description?: string; phase: string } | undefined {
+  if (!projectId) return undefined;
+  const project = getProjectById(projectId);
+  if (!project) return undefined;
+  return {
+    id: project.id,
+    title: project.title,
+    goal: project.goal,
+    description: project.description,
+    phase: project.phase,
+  };
+}
+
 // ─── Cursor Commit Endpoint ─────────────────────────────────────────────────
 
 const commitCursorsRoute = route({
@@ -188,11 +211,13 @@ export async function handlePoll(
         if (firstOfferedTask) {
           const claimedTask = claimOfferedTask(firstOfferedTask.id, myAgentId);
           if (claimedTask) {
+            const offeredProject = projectForTrigger(claimedTask.projectId);
             return {
               trigger: {
                 type: "task_offered",
                 taskId: claimedTask.id,
                 task: claimedTask,
+                ...(offeredProject && { project: offeredProject }),
               },
             };
           }
@@ -289,6 +314,10 @@ export async function handlePoll(
                 ? renderIdentity(resolveIdentity("slack", pendingTask.slackUserId))
                 : undefined;
 
+            // Project context enrichment (Projects Phase 4): same pattern as
+            // requestedBy above — present only when the task is linked.
+            const assignedProject = projectForTrigger(pendingTask.projectId);
+
             return {
               trigger: {
                 type: "task_assigned",
@@ -309,6 +338,7 @@ export async function handlePoll(
                 ...(requestedByUnknownName && {
                   requestedBy: { name: requestedByUnknownName },
                 }),
+                ...(assignedProject && { project: assignedProject }),
               },
             };
           }
@@ -416,11 +446,13 @@ export async function handlePoll(
                   source: claimed.source,
                   agentId: myAgentId,
                 });
+                const claimedProject = projectForTrigger(claimed.projectId);
                 return {
                   trigger: {
                     type: "task_assigned",
                     taskId: claimed.id,
                     task: { ...claimed, attachments: attachmentsForTrigger(claimed.id) },
+                    ...(claimedProject && { project: claimedProject }),
                   },
                 };
               }
