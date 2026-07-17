@@ -106,6 +106,17 @@ export {
   useUpdateMetric,
 } from "./use-metric-definitions";
 export { useMetrics } from "./use-metrics";
+export type { UseProjectsOptions } from "./use-projects";
+export {
+  useCreateProject,
+  useLinkProjectTask,
+  useProject,
+  useProjectDocuments,
+  useProjectSessions,
+  useProjects,
+  useUnlinkProjectTask,
+  useUpdateProject,
+} from "./use-projects";
 export type { PromptTemplateFilters } from "./use-prompt-templates";
 export {
   useCheckoutTemplate,

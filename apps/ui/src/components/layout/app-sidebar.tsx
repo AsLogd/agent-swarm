@@ -8,6 +8,7 @@ import {
   Contact,
   FileClock,
   FileText,
+  FolderKanban,
   Globe,
   Home,
   Link2,
@@ -91,6 +92,12 @@ const navGroups: NavGroup[] = [
       { title: "Home", path: "/", icon: Home },
       { title: "Tasks", path: "/tasks", icon: ListTodo },
       { title: "Sessions", path: "/sessions", icon: MessageSquare, gate: { minVersion: "1.76.0" } },
+      {
+        title: "Projects",
+        path: "/projects",
+        icon: FolderKanban,
+        gate: { minVersion: "1.120.0" },
+      },
       { title: "Approvals", path: "/approval-requests", icon: ClipboardCheck },
     ],
   },
@@ -277,6 +284,7 @@ export function AppSidebar() {
     "1.79.0": useFeatureGate("1.79.0"), // Pages
     "1.80.0": useFeatureGate("1.80.0"), // People
     "1.82.0": useFeatureGate("1.82.0"), // Live nav-item counts
+    "1.120.0": useFeatureGate("1.120.0"), // Projects
   };
   const isGated = (item: NavItem) =>
     !!item.gate && gates[item.gate.minVersion]?.supported === false;

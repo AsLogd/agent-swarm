@@ -7,6 +7,7 @@
  * page so the chrome stays consistent.
  */
 
+import { useSearchParams } from "react-router-dom";
 import { useFeatureGate } from "@/api/hooks/use-feature-gate";
 import { UpgradeRequired } from "@/components/feature-gate/upgrade-required";
 import { NewSessionView } from "@/components/sessions/new-session-view";
@@ -14,6 +15,10 @@ import { SessionsShell } from "@/components/sessions/sessions-shell";
 
 export default function SessionsPage() {
   const gate = useFeatureGate("1.76.0");
+  // `?projectId=` — project detail page's "Start session" deep-link. The new
+  // root task is created pre-linked to the project (provenance `created`).
+  const [searchParams] = useSearchParams();
+  const projectId = searchParams.get("projectId") ?? undefined;
 
   if (!gate.supported) {
     return (
@@ -27,7 +32,7 @@ export default function SessionsPage() {
 
   return (
     <SessionsShell>
-      <NewSessionView />
+      <NewSessionView projectId={projectId} />
     </SessionsShell>
   );
 }
