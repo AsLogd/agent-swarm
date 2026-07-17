@@ -713,6 +713,30 @@ Honor this requester profile in tone, depth, and format where it doesn't conflic
   category: "task_lifecycle",
 });
 
+registerTemplate({
+  eventType: "task.project.context",
+  header: "",
+  defaultBody: `
+## Project Context
+This task belongs to the project **{{project_title}}** (phase: {{project_phase}}, id: {{project_id}}).{{project_goal_section}}{{project_description_section}}
+Keep your work aligned with this project's goal. For the full project record use the \`get-projects\` tool (deferred — load via \`ToolSearch("select:get-projects")\`); to see sibling work in this project, list tasks filtered by it: \`GET /api/tasks?projectId={{project_id}}\`.
+`,
+  variables: [
+    { name: "project_id", description: "The project's unique identifier" },
+    { name: "project_title", description: "The project's title" },
+    { name: "project_phase", description: "The project's lifecycle phase" },
+    {
+      name: "project_goal_section",
+      description: "Formatted goal line (leading newline), or empty string",
+    },
+    {
+      name: "project_description_section",
+      description: "Formatted description line (leading newline, capped), or empty string",
+    },
+  ],
+  category: "task_lifecycle",
+});
+
 // ============================================================================
 // Composite session templates (category: "session")
 // ============================================================================
