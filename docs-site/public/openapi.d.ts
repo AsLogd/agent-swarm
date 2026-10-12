@@ -490,8 +490,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Mark an agent or runtime offline on shutdown
-         * @description Retires the calling process. Workers may send `X-Runtime-Instance-ID`, the per-boot identifier of the calling process. It is ignored unless MULTI_RUNTIME_ENABLED is set. With multi-runtime mode on, the header is required and only that runtime is retired; the agent goes offline once no live runtime remains. With the flag off, the agent is marked offline as before.
+         * End a session or terminate an agent runtime
+         * @description Closes the calling session. Workers may send `X-Runtime-Instance-ID`, the per-boot identifier of the calling process. It is ignored unless MULTI_RUNTIME_ENABLED is set. Pooled runtimes remain active unless runtimeShutdown is true. With multi-runtime mode on, the header is required and static runtimes retire independently. With the flag off, static agents are marked offline.
          */
         post: {
             parameters: {
@@ -503,9 +503,15 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        runtimeShutdown?: boolean;
+                    };
+                };
+            };
             responses: {
-                /** @description Runtime (and agent, when last) marked offline */
+                /** @description Session closed or runtime retired */
                 204: {
                     headers: {
                         [name: string]: unknown;
@@ -2286,6 +2292,9 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["Agent"] & {
                             enabledCapabilities: ("core" | "task-pool" | "scripts" | "config" | "prompt-templates" | "mcp" | "profiles" | "services" | "scheduling" | "memory" | "workflows" | "pages" | "metrics" | "kv" | "slack" | "tracker" | "skills" | "messaging" | "repo" | "agentmail" | "kapso" | "swarm-x")[];
+                            /** @enum {string} */
+                            deliveryMode: "poll" | "push";
+                            pollRequired?: boolean;
                         };
                     };
                 };
@@ -2297,6 +2306,9 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["Agent"] & {
                             enabledCapabilities: ("core" | "task-pool" | "scripts" | "config" | "prompt-templates" | "mcp" | "profiles" | "services" | "scheduling" | "memory" | "workflows" | "pages" | "metrics" | "kv" | "slack" | "tracker" | "skills" | "messaging" | "repo" | "agentmail" | "kapso" | "swarm-x")[];
+                            /** @enum {string} */
+                            deliveryMode: "poll" | "push";
+                            pollRequired?: boolean;
                         };
                     };
                 };
@@ -2680,7 +2692,19 @@ export interface paths {
                                 id: string;
                                 agentId: string;
                                 /** @enum {string} */
-                                status: "active" | "offline";
+                                status: "active" | "offline" | "provisioning";
+                                poolId?: string | null;
+                                controllerId?: string | null;
+                                externalHandle?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                provisionAttempts?: number;
+                                provisionError?: string | null;
+                                provisionRequestedAt?: string | null;
+                                draining?: boolean;
+                                idleSince?: string | null;
+                                leaseExpiresAt?: string | null;
+                                taskId?: string | null;
                                 reportedSlots: number;
                                 credentialReady?: boolean | null;
                                 /** Format: date-time */
@@ -10867,6 +10891,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            runtime_pools: {
+                                enabled: boolean;
+                                supervisor: string;
+                            };
                             identity: {
                                 name: string;
                                 logo_url: string | null;
@@ -13017,6 +13045,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["AgentTask"];
+                    };
+                };
+                /** @description Task belongs to another token agent */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
                 /** @description Task not found */
@@ -17172,6 +17209,8 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
+                        /** Format: uuid */
+                        id?: string;
                         sessionId: string;
                         agentId: string;
                         totalCostUsd: number;
@@ -17438,8 +17477,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Mint an ephemeral session token for an ACP provider session
-         * @description Returns a short-lived aseph_ bearer for use by the ACP adapter in place of the full operator key. The token expires at the requested TTL and is actively revoked when the session ends. Only the operator key may mint session tokens.
+         * Mint an ephemeral task or runtime token
+         * @description Operators can mint task or runtime tokens. Runtime tokens can mint task tokens for their own assigned tasks. Child tokens expire with their parent runtime.
          */
         post: {
             parameters: {
@@ -17452,8 +17491,9 @@ export interface paths {
                 content: {
                     "application/json": {
                         agentId: string;
-                        taskId: string;
-                        ttlMs: number;
+                        taskId?: string;
+                        runtimeId?: string;
+                        ttlMs?: number;
                     };
                 };
             };
@@ -17488,6 +17528,15 @@ export interface paths {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Token cannot mint for this agent or task */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -17508,7 +17557,7 @@ export interface paths {
         post?: never;
         /**
          * Revoke an ephemeral session token
-         * @description Revokes an aseph_ bearer token by ID. No-op if already revoked.
+         * @description Operators can revoke any ephemeral token. With runtime pools enabled, runtime tokens can revoke their own child task tokens. Repeated revocation has no effect.
          */
         delete: {
             parameters: {
@@ -17530,6 +17579,15 @@ export interface paths {
                 };
                 /** @description Unauthorized */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Token cannot revoke this child */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -23732,6 +23790,206 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runtime-pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List runtime pools */
+        get: operations["runtime_listPools"];
+        put?: never;
+        /** Create a runtime pool */
+        post: operations["runtime_createPool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime-pools/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a runtime pool */
+        get: operations["runtime_getPool"];
+        put?: never;
+        post?: never;
+        /** Delete a runtime pool */
+        delete: operations["runtime_deletePool"];
+        options?: never;
+        head?: never;
+        /** Update a runtime pool */
+        patch: operations["runtime_patchPool"];
+        trace?: never;
+    };
+    "/api/runtime-pools/{id}/runtimes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List pool runtimes */
+        get: operations["runtime_runtimes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime-pools/{id}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an offline agent in a pool */
+        post: operations["runtime_createAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime-controllers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List runtime controllers */
+        get: operations["runtime_listControllers"];
+        put?: never;
+        /** Create a runtime controller */
+        post: operations["runtime_createController"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime-controllers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a runtime controller */
+        get: operations["runtime_getController"];
+        put?: never;
+        post?: never;
+        /** Delete a runtime controller */
+        delete: operations["runtime_deleteController"];
+        options?: never;
+        head?: never;
+        /** Update a runtime controller */
+        patch: operations["runtime_patchController"];
+        trace?: never;
+    };
+    "/api/agents/{id}/runtime-pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind or unbind an agent to a pool */
+        put: operations["runtime_bindAgent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runtime-controllers/{id}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a remote controller token
+         * @description Returns the token once. Revokes the previous token and disconnects its session.
+         */
+        post: operations["runtime_mintControllerToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/controllers/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Connect a remote runtime controller
+         * @description Requires a controller token and a WebSocket upgrade. Accepts one session per controller.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Controller socket connected */
+                101: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Controller token required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Runtime pools disabled */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -23782,6 +24040,7 @@ export interface components {
              */
             routingSource?: "declared" | "engine_default";
             routingNote?: string;
+            poolWakeAt?: string;
             taskType?: string;
             /** @default [] */
             tags: string[];
@@ -23990,6 +24249,9 @@ export interface components {
             isLead: boolean;
             /** @enum {string} */
             status: "idle" | "busy" | "offline" | "waiting_for_credentials";
+            runtimePoolId?: string | null;
+            runtimeProvisionAttempts?: number;
+            runtimeProvisionRetryAt?: string | null;
             description?: string;
             role?: string;
             /** @default [] */
@@ -25292,6 +25554,109 @@ export interface components {
             dir?: string;
             vcsRepo?: string;
             enabled: boolean;
+        };
+        RuntimePool: {
+            name: string;
+            /** @enum {string} */
+            kind: "static" | "docker" | "e2b" | "k8s";
+            placements: string[];
+            image?: string | null;
+            /**
+             * @default idle
+             * @enum {string}
+             */
+            lifecycle: "idle" | "per-task";
+            /** @default null */
+            idleMinutes: number | null;
+            /** @default 1 */
+            slotsPerRuntime: number;
+            /** @default null */
+            maxRuntimes: number | null;
+            /** @default 0 */
+            minRuntimes: number;
+            /**
+             * @default null
+             * @enum {string|null}
+             */
+            delivery: "poll" | "push" | null;
+            /** @default {} */
+            env: {
+                [key: string]: string;
+            };
+            /** @default null */
+            resources: {
+                cpu?: number;
+                memoryMb?: number;
+            } | null;
+            /** @default null */
+            ttlSec: number | null;
+            /** @default true */
+            enabled: boolean;
+            id: string;
+            resolvedImage: string | null;
+            consecutiveFailures: number;
+            circuitOpenUntil: string | null;
+            lastError: string | null;
+            lastErrorAt: string | null;
+            createdBy: string | null;
+            updatedBy: string | null;
+            createdAt: string;
+            updatedAt: string;
+        };
+        RuntimeInstance: {
+            id: string;
+            agentId: string;
+            /** @enum {string} */
+            status: "active" | "offline" | "provisioning";
+            poolId?: string | null;
+            controllerId?: string | null;
+            externalHandle?: {
+                [key: string]: unknown;
+            } | null;
+            provisionAttempts?: number;
+            provisionError?: string | null;
+            provisionRequestedAt?: string | null;
+            draining?: boolean;
+            idleSince?: string | null;
+            leaseExpiresAt?: string | null;
+            taskId?: string | null;
+            reportedSlots: number;
+            credentialReady?: boolean | null;
+            metadata: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            lastSeenAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RuntimeController: {
+            name: string;
+            /** @enum {string} */
+            kind: "static" | "docker" | "e2b" | "k8s";
+            /**
+             * @default remote
+             * @enum {string}
+             */
+            placement: "builtin" | "remote";
+            /** @default {} */
+            config: {
+                [key: string]: string;
+            };
+            id: string;
+            secretConfigKeys: string[];
+            secretConfigError?: boolean;
+            /** @enum {string} */
+            status: "online" | "offline" | "unknown";
+            lastSeenAt: string | null;
+            lastError: string | null;
+            lastErrorAt: string | null;
+            createdBy: string | null;
+            updatedBy: string | null;
+            createdAt: string;
+            updatedAt: string;
         };
     };
     responses: never;
@@ -28815,6 +29180,903 @@ export interface operations {
             };
             /** @description workspace-rw scripts are not supported */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_listPools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        pools: components["schemas"]["RuntimePool"][];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_createPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** @enum {string} */
+                    kind: "static" | "docker" | "e2b" | "k8s";
+                    placements: string[];
+                    image?: string | null;
+                    /**
+                     * @default idle
+                     * @enum {string}
+                     */
+                    lifecycle?: "idle" | "per-task";
+                    /** @default null */
+                    idleMinutes?: number | null;
+                    /** @default 1 */
+                    slotsPerRuntime?: number;
+                    /** @default null */
+                    maxRuntimes?: number | null;
+                    /** @default 0 */
+                    minRuntimes?: number;
+                    /**
+                     * @default null
+                     * @enum {string|null}
+                     */
+                    delivery?: "poll" | "push" | null;
+                    /** @default {} */
+                    env?: {
+                        [key: string]: string;
+                    };
+                    /** @default null */
+                    resources?: {
+                        cpu?: number;
+                        memoryMb?: number;
+                    } | null;
+                    /** @default null */
+                    ttlSec?: number | null;
+                    /** @default true */
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        pool: components["schemas"]["RuntimePool"];
+                        warning?: string;
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_getPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        pool: components["schemas"]["RuntimePool"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_deletePool: {
+        parameters: {
+            query?: {
+                force?: "true" | "false";
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        deleted: true;
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_patchPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    /** @enum {string} */
+                    kind?: "static" | "docker" | "e2b" | "k8s";
+                    placements?: string[];
+                    image?: string | null;
+                    /** @enum {string} */
+                    lifecycle?: "idle" | "per-task";
+                    idleMinutes?: number | null;
+                    slotsPerRuntime?: number;
+                    maxRuntimes?: number | null;
+                    minRuntimes?: number;
+                    /** @enum {string|null} */
+                    delivery?: "poll" | "push" | null;
+                    env?: {
+                        [key: string]: string;
+                    };
+                    resources?: {
+                        cpu?: number;
+                        memoryMb?: number;
+                    } | null;
+                    ttlSec?: number | null;
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        pool: components["schemas"]["RuntimePool"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_runtimes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        runtimes: components["schemas"]["RuntimeInstance"][];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_createAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    name: string;
+                    isLead?: boolean;
+                    /** @enum {string} */
+                    harnessProvider?: "claude" | "codex" | "pi" | "devin" | "claude-managed" | "opencode" | "acp" | "dsh" | "amp" | "cursor" | "grok";
+                    maxTasks?: number;
+                    templateId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agent: components["schemas"]["Agent"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_listControllers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        controllers: components["schemas"]["RuntimeController"][];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_createController: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** @enum {string} */
+                    kind: "static" | "docker" | "e2b" | "k8s";
+                    /**
+                     * @default remote
+                     * @enum {string}
+                     */
+                    placement?: "builtin" | "remote";
+                    /** @default {} */
+                    config?: {
+                        [key: string]: string;
+                    };
+                    secretConfig?: {
+                        [key: string]: string | null;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        controller: components["schemas"]["RuntimeController"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_getController: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        controller: components["schemas"]["RuntimeController"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_deleteController: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        deleted: true;
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_patchController: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    /** @enum {string} */
+                    kind?: "static" | "docker" | "e2b" | "k8s";
+                    /** @enum {string} */
+                    placement?: "builtin" | "remote";
+                    config?: {
+                        [key: string]: string;
+                    };
+                    secretConfig?: {
+                        [key: string]: string | null;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        controller: components["schemas"]["RuntimeController"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Entity is in use or already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_bindAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    poolId: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agent: components["schemas"]["Agent"];
+                    };
+                };
+            };
+            /** @description Invalid configuration */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found or runtime pools disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runtime_mintControllerToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Controller token */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        tokenId: string;
+                        plaintext: string;
+                        expiresAt: string;
+                    };
+                };
+            };
+            /** @description Controller placement must be remote */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Operator or user credentials required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Controller not found or runtime pools disabled */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -71,3 +71,6 @@ import "./webhooks";
 import "./workflow-events";
 import "./workflows";
 import "./x";
+
+import "./runtime-pools";
+import "./controllers-connect";

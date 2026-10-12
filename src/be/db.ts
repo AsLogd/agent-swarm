@@ -136,6 +136,7 @@ import {
   CODEX_AUTH_WATCH_NAMESPACE,
   codexAuthBenchMarkerKey,
 } from "../utils/codex-auth-failure";
+import { MASKED_SECRET_VALUE } from "../utils/config-secrets";
 import { deriveProviderFromKeyType } from "../utils/credentials";
 import type { RateLimitWindowTelemetry } from "../utils/error-tracker";
 import { extractGitHubPullRequestUrls } from "../utils/github-pull-request";
@@ -147,6 +148,7 @@ import {
 } from "../utils/identity-field-budget";
 import { activeModelBlock, type ModelFamily } from "../utils/model-rate-limit-windows";
 import { getCurrentRequestUserId } from "../utils/request-auth-context";
+import { isRuntimePoolsEnabled } from "../utils/runtime-pools-flag";
 import {
   registerSensitiveKeyName,
   type ScrubbedText,
@@ -205,6 +207,7 @@ import { configSecretName, registerStoredSecret } from "./secret-registry";
 import { promotePendingSteeringForTask } from "./steering";
 import { isInternalConfigKey, isReservedConfigKey, reservedKeyError } from "./swarm-config-guard";
 import { emitTaskStarted } from "./task-lifecycle-events";
+import { publishWorkerConfigNudge, publishWorkerNudge } from "./worker-nudges";
 import { defineWorkflowPayload, type WorkflowPayloadView } from "./workflow-replay";
 
 export {
@@ -1966,6 +1969,11 @@ export async function createSteeringMessage(
   );
   if (!row) throw new Error("Failed to create steering message");
 
+  getDbClient().afterCommit(async () => {
+    const task = await getTaskById(args.taskId);
+    if (task?.agentId) publishWorkerNudge(task.agentId, { kind: "steer", taskId: args.taskId });
+  });
+
   try {
     await createLogEntry({
       eventType: "task_steering",
@@ -3017,17 +3025,26 @@ export async function claimTask(taskId: string, agentId: string): Promise<AgentT
   return result;
 }
 
-export async function releaseTask(taskId: string): Promise<AgentTask | null> {
-  const task = await getTaskById(taskId);
+export async function releaseTask(
+  taskId: string,
+  wakeSnapshot?: AgentTask,
+): Promise<AgentTask | null> {
+  const task = wakeSnapshot ?? (await getTaskById(taskId));
   if (!task) return null;
   // Allow releasing both 'pending' (directly assigned) and 'in_progress' (pool-claimed) tasks
   if (task.status !== "pending" && task.status !== "in_progress") return null;
 
   const now = new Date().toISOString();
   const row = await getDbClient().get<AgentTaskRow>(
-    `UPDATE agent_tasks SET agentId = NULL, status = 'unassigned', lastUpdatedAt = ?
-       WHERE id = ? AND status IN ('pending', 'in_progress') RETURNING *`,
-    [now, taskId],
+    `UPDATE agent_tasks SET agentId = NULL, status = 'unassigned', lastUpdatedAt = ?, pool_wake_at = NULL
+       WHERE id = ? AND status IN ('pending', 'in_progress')
+       ${wakeSnapshot ? "AND status = 'pending' AND agentId = ? AND pool_wake_at = ? AND COALESCE(routing_reason, '') != 'human_pinned'" : ""}
+       RETURNING *`,
+    [
+      now,
+      taskId,
+      ...(wakeSnapshot ? [wakeSnapshot.agentId ?? null, wakeSnapshot.poolWakeAt ?? null] : []),
+    ],
   );
 
   if (row) {
@@ -3040,6 +3057,15 @@ export async function releaseTask(taskId: string): Promise<AgentTask | null> {
         newValue: "unassigned",
       });
     } catch {}
+    // The sweep routes released wakes itself, preserving its exclusion of the old agent.
+    if (isRuntimePoolsEnabled() && !wakeSnapshot)
+      getDbClient().afterCommit(() => {
+        void import("../workflows/event-bus")
+          .then(({ workflowEventBus }) => workflowEventBus.emit("task.unassigned", { taskId }))
+          .catch((error) =>
+            console.error("[db] Routing event failed:", scrubSecrets(String(error))),
+          );
+      });
   }
 
   return row ? rowToAgentTask(row) : null;
@@ -3091,6 +3117,7 @@ export async function acceptTask(taskId: string, agentId: string): Promise<Agent
         newValue: "pending",
       });
     } catch {}
+    getDbClient().afterCommit(() => publishWorkerNudge(agentId, { kind: "work", taskId }));
   }
 
   return row ? rowToAgentTask(row) : null;
@@ -3111,7 +3138,7 @@ export async function rejectTask(
   const row = await getDbClient().get<AgentTaskRow>(
     `UPDATE agent_tasks SET
         status = 'unassigned', offeredTo = NULL, offeredAt = NULL,
-        rejectionReason = ?, lastUpdatedAt = ?
+        rejectionReason = ?, lastUpdatedAt = ?, pool_wake_at = NULL
        WHERE id = ? AND status IN ('offered', 'reviewing') RETURNING *`,
     [reason ?? null, now, taskId],
   );
@@ -3127,6 +3154,14 @@ export async function rejectTask(
         metadata: reason ? { reason } : undefined,
       });
     } catch {}
+    if (isRuntimePoolsEnabled())
+      getDbClient().afterCommit(() => {
+        void import("../workflows/event-bus")
+          .then(({ workflowEventBus }) => workflowEventBus.emit("task.unassigned", { taskId }))
+          .catch((error) =>
+            console.error("[db] Routing event failed:", scrubSecrets(String(error))),
+          );
+      });
   }
 
   return row ? rowToAgentTask(row) : null;
@@ -3306,19 +3341,30 @@ export async function releaseStaleReviewingTasks(timeoutMinutes: number = 30): P
  * matters — `runtimeStaleThresholdMinutes()` / `RUNTIME_STALE_THRESHOLD_MIN`
  * for multi-runtime expiry, or immediate for an explicit close — so no
  * separate timeout knob is introduced here.
+ * When runtime pools are enabled, the supplied reachability predicate preserves
+ * offers to wakeable or provisioning agents without a DB import of runtime-pools.
  */
-export async function releaseStaleOfferedTasksForOfflineAgents(): Promise<number> {
+export async function releaseStaleOfferedTasksForOfflineAgents(
+  isReachable?: (agent: Agent) => Promise<boolean>,
+): Promise<number> {
   const now = new Date().toISOString();
+  const reachable: string[] = [];
+  if (isRuntimePoolsEnabled() && isReachable) {
+    for (const agent of await getAllAgents()) {
+      if (agent.status === "offline" && (await isReachable(agent))) reachable.push(agent.id);
+    }
+  }
 
   const result = await getDbClient().run(
     `UPDATE agent_tasks
      SET status = 'unassigned', offeredTo = NULL, offeredAt = NULL, lastUpdatedAt = ?
      WHERE status = 'offered'
        AND offeredTo IS NOT NULL
+       ${reachable.length ? `AND offeredTo NOT IN (${reachable.map(() => "?").join(",")})` : ""}
        AND NOT EXISTS (
          SELECT 1 FROM agents WHERE agents.id = agent_tasks.offeredTo AND agents.status != 'offline'
        )`,
-    [now],
+    [now, ...reachable],
   );
 
   return result.changes;
@@ -3934,6 +3980,12 @@ export async function postMessage(
       targetMentions = parentMessage.mentions;
     }
   }
+
+  getDbClient().afterCommit(() => {
+    for (const mentionedAgentId of new Set(targetMentions)) {
+      publishWorkerNudge(mentionedAgentId, { kind: "work" });
+    }
+  });
 
   // Only create tasks when /task prefix is used
   if (isTaskMessage && targetMentions.length > 0) {
@@ -4752,6 +4804,7 @@ function rowToSessionCost(row: SessionCostRow): SessionCost {
 }
 
 export interface CreateSessionCostInput {
+  id?: string;
   sessionId: string;
   taskId?: string;
   agentId: string;
@@ -4787,7 +4840,7 @@ export interface CreateSessionCostInput {
 }
 
 export async function createSessionCost(input: CreateSessionCostInput): Promise<SessionCost> {
-  const id = crypto.randomUUID();
+  const id = input.id ?? crypto.randomUUID();
   const costSource: SessionCostSource = input.costSource ?? "harness";
   const reasoningOutputTokens = input.reasoningOutputTokens ?? 0;
   const thinkingTokens = input.thinkingTokens ?? 0;
@@ -4801,7 +4854,8 @@ export async function createSessionCost(input: CreateSessionCostInput): Promise<
          costSource, harnessCostUsd, cacheWrite5mTokens, cacheWrite1hTokens,
          modelBreakdown, createdAt
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       ON CONFLICT(id) DO NOTHING`,
     [
       id,
       input.sessionId,
@@ -4826,29 +4880,11 @@ export async function createSessionCost(input: CreateSessionCostInput): Promise<
     ],
   );
 
-  return {
+  const row = await getDbClient().get<SessionCostRow>("SELECT * FROM session_costs WHERE id = ?", [
     id,
-    sessionId: input.sessionId,
-    taskId: input.taskId,
-    agentId: input.agentId,
-    totalCostUsd: input.totalCostUsd,
-    inputTokens: input.inputTokens ?? 0,
-    outputTokens: input.outputTokens ?? 0,
-    cacheReadTokens: input.cacheReadTokens ?? 0,
-    cacheWriteTokens: input.cacheWriteTokens ?? 0,
-    reasoningOutputTokens,
-    thinkingTokens,
-    durationMs: input.durationMs,
-    numTurns: input.numTurns,
-    model: input.model,
-    isError: input.isError ?? false,
-    costSource,
-    harnessCostUsd: input.harnessCostUsd ?? null,
-    cacheWrite5mTokens: input.cacheWrite5mTokens ?? null,
-    cacheWrite1hTokens: input.cacheWrite1hTokens ?? null,
-    modelBreakdown: input.modelBreakdown ?? null,
-    createdAt: new Date().toISOString(),
-  };
+  ]);
+  if (!row) throw new Error("Session cost record is missing after insertion.");
+  return rowToSessionCost(row);
 }
 
 export async function getSessionCostsByTaskId(taskId: string, limit = 500): Promise<SessionCost[]> {
@@ -6415,7 +6451,7 @@ export function autoEncryptLegacyPlaintextSecrets(
  * Mask secret values in config entries for API responses.
  */
 export function maskSecrets(configs: SwarmConfig[]): SwarmConfig[] {
-  return configs.map((c) => (c.isSecret ? { ...c, value: "********" } : c));
+  return configs.map((c) => (c.isSecret ? { ...c, value: MASKED_SECRET_VALUE } : c));
 }
 
 /**
@@ -6636,6 +6672,8 @@ export async function upsertSwarmConfig(data: {
     registerSensitiveKeyName(config.key);
   }
 
+  getDbClient().afterCommit(() => publishWorkerConfigNudge(config.scope, config.scopeId));
+
   return config;
 }
 
@@ -6660,8 +6698,12 @@ export async function emitBuiltInIntegrationConnectedOnce(
  * predate hardening must remain removable through remediation paths.
  */
 export async function deleteSwarmConfig(id: string): Promise<boolean> {
-  const result = await getDbClient().run("DELETE FROM swarm_config WHERE id = ?", [id]);
-  return result.changes > 0;
+  const row = await getDbClient().get<Pick<SwarmConfigRow, "scope" | "scopeId">>(
+    "DELETE FROM swarm_config WHERE id = ? RETURNING scope, scopeId",
+    [id],
+  );
+  if (row) getDbClient().afterCommit(() => publishWorkerConfigNudge(row.scope, row.scopeId));
+  return row !== null;
 }
 
 /**
@@ -6698,7 +6740,11 @@ export async function deleteSwarmConfigByKey(
  * Scope resolution: repo > agent > global (most-specific wins).
  * Returns one entry per unique key with the most-specific scope winning.
  */
-export async function getResolvedConfig(agentId?: string, repoId?: string): Promise<SwarmConfig[]> {
+export async function getResolvedConfig(
+  agentId?: string,
+  repoId?: string,
+  options: { includeRepoSecrets?: boolean } = {},
+): Promise<SwarmConfig[]> {
   // Start with global configs
   const configMap = new Map<string, SwarmConfig>();
 
@@ -6719,6 +6765,7 @@ export async function getResolvedConfig(agentId?: string, repoId?: string): Prom
   if (repoId) {
     const repoConfigs = await getSwarmConfigs({ scope: "repo", scopeId: repoId });
     for (const config of repoConfigs) {
+      if (config.isSecret && options.includeRepoSecrets === false) continue;
       configMap.set(config.key, config);
     }
   }

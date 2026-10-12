@@ -406,6 +406,248 @@ export const CONFIGURATION_GROUPS: ConfigCatalogGroup[] = [
     icon: Cpu,
     entries: [
       {
+        key: "RUNTIME_POOLS_ENABLED",
+        label: "Runtime pools (beta)",
+        description:
+          "Enable runtime pool and controller configuration. Restart the API to seed built-in controllers.",
+        kind: "boolean",
+        defaultValue: "false",
+        restartRequired: true,
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_DEFAULT_DELIVERY",
+        label: "Default worker delivery",
+        description: "Default delivery for pools without an explicit mode. Choose poll or push.",
+        kind: "enum",
+        options: ["poll", "push"],
+        defaultValue: "poll",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_WAKE_GRACE_SEC",
+        label: "Runtime wake grace (seconds)",
+        description: "Wait for a live worker before assigning a task to a sleeping pool agent.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "15",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_WAKE_REROUTE_SEC",
+        label: "Runtime wake timeout (seconds)",
+        description:
+          "Release pending wake assignments after this timeout and try another eligible agent.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "600",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_ROUTING_INTERVAL_MS",
+        label: "Runtime routing interval (milliseconds)",
+        description:
+          "Check queued tasks at this interval. Zero uses 5000 ms. Positive values below 500 use 500 ms.",
+        kind: "number",
+        unit: "ms",
+        defaultValue: "5000",
+        restartRequired: true,
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_SUPERVISOR_INTERVAL_MS",
+        label: "Runtime supervisor interval",
+        description:
+          "Check runtime demand and lifecycle at this interval. Restart the API after changing this value.",
+        kind: "number",
+        unit: "ms",
+        defaultValue: "5000",
+        restartRequired: true,
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_WORKER_API_URL",
+        label: "Runtime worker API URL",
+        description:
+          "API URL reachable by provisioned workers. Controller WORKER_API_URL overrides this fallback.",
+        kind: "string",
+        defaultValue: "",
+        placeholder: "http://api:3013",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_CONTROLLER_GRACE_SEC",
+        label: "Controller disconnect grace",
+        description:
+          "Preserve runtimes during a remote controller disconnect before recovery and token revocation.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "120",
+        docsUrl: `${DOCS}ui/configuration#remote-controllers`,
+      },
+      {
+        key: "RUNTIME_PROVISION_CONCURRENCY",
+        label: "Runtime provision concurrency",
+        description:
+          "Limit simultaneous runtime provisions. Pool capacity, demand reservations, retry deadlines, and circuit checks still apply.",
+        kind: "number",
+        defaultValue: "8",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_PER_TASK_EXIT_GRACE_SEC",
+        label: "Per-task runtime exit grace",
+        description:
+          "Preserve a runtime after task completion until runner shutdown or this timeout. The runner can report cost, logs, and context.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "60",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_PROVISION_TIMEOUT_SEC",
+        label: "Runtime registration timeout",
+        description:
+          "Terminate a runtime that does not register before this timeout. Each timeout counts as a provision failure.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "300",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_PROVISION_MAX_ATTEMPTS",
+        label: "Runtime provision attempts",
+        description:
+          "Fail the oldest waiting task after this many provision failures. Retries wait 30, 90, then 180 seconds.",
+        kind: "number",
+        defaultValue: "3",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_CIRCUIT_THRESHOLD",
+        label: "Runtime circuit threshold",
+        description:
+          "Stop provisioning for a pool after this many consecutive failures. Registration resets the count.",
+        kind: "number",
+        defaultValue: "5",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_CIRCUIT_OPEN_MIN",
+        label: "Runtime circuit duration",
+        description:
+          "Wait this long before one trial provision. Registration closes the circuit. Failure opens the circuit again.",
+        kind: "number",
+        unit: "min",
+        defaultValue: "10",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_SOCKET_GRACE_SEC",
+        label: "Runtime socket grace",
+        description:
+          "Wait after a push socket disconnect before checking the provider. A running runtime keeps its tasks.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "60",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_TOKEN_ROTATE_BEFORE_MIN",
+        label: "Runtime token rotation window",
+        description:
+          "Drain busy runtimes before their token expires. Terminate idle runtimes so demand can create replacements.",
+        kind: "number",
+        unit: "min",
+        defaultValue: "60",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_LEASE_RENEW_BEFORE_SEC",
+        label: "Runtime lease renewal window",
+        description: "Renew wanted E2B runtimes before their lease expires.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "300",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_E2B_BUILD_TIMEOUT_SEC",
+        label: "E2B template build timeout",
+        description: "Cancel an E2B template build after this duration.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "600",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "RUNTIME_ROTATE_BEFORE_SEC",
+        label: "Runtime rotation window",
+        description: "Drain E2B runtimes before their continuous runtime limit.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "600",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "E2B_MAX_CONTINUOUS_SEC", // gitleaks:allow (env var name)
+        label: "E2B continuous runtime limit",
+        description:
+          "Use 3600 seconds for Hobby or 86400 seconds for Pro. Controller configuration overrides this default.",
+        kind: "number",
+        unit: "s",
+        defaultValue: "3600",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "E2B_API_BASE",
+        label: "E2B API endpoint",
+        description:
+          "Custom E2B API endpoint for built-in controllers. Controller configuration overrides this fallback.",
+        kind: "string",
+        defaultValue: "",
+        docsUrl: `${DOCS}guides/runtime-pools#e2b-pools`,
+      },
+      {
+        key: "RUNTIME_DOCKER_HOST",
+        label: "Seeded Docker socket",
+        description:
+          "Seed the built-in Docker controller with this Unix socket, even when Docker is offline. Existing controller configuration takes precedence.",
+        kind: "string",
+        defaultValue: "",
+        restartRequired: true,
+        docsUrl: `${DOCS}guides/runtime-pools#docker-pools`,
+      },
+      {
+        key: "DOCKER_HOST",
+        label: "Docker socket",
+        description:
+          "Unix socket for built-in Docker controllers. Controller configuration overrides this fallback. Restart the API to seed a controller.",
+        kind: "string",
+        defaultValue: "unix:///var/run/docker.sock",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "DOCKER_NETWORK",
+        label: "Docker network",
+        description:
+          "Network for provisioned Docker workers. Controller configuration overrides this fallback.",
+        kind: "string",
+        defaultValue: "",
+        placeholder: "swarm-local",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
+        key: "DOCKER_EXTRA_HOSTS",
+        label: "Docker extra hosts",
+        description:
+          "Comma-separated host:address entries for provisioned workers. Controller configuration overrides this fallback.",
+        kind: "string",
+        defaultValue: "",
+        placeholder: "service:10.1.0.2,other:10.1.0.3",
+        docsUrl: `${DOCS}ui/configuration#runtime-pools`,
+      },
+      {
         key: "CLAUDE_TRUST_PRESEED",
         label: "Claude workspace trust pre-seed",
         description:
@@ -1012,6 +1254,26 @@ export const CONFIGURATION_GROUPS: ConfigCatalogGroup[] = [
     description: "Role-based access control, audit logging, budget admission, and telemetry.",
     icon: Shield,
     entries: [
+      {
+        key: "RUNTIME_TOKEN_TTL_HOURS",
+        label: "Runtime token lifetime",
+        description:
+          "Lifetime for new runtime tokens. Task tokens cannot outlive their runtime token.",
+        kind: "number",
+        unit: "h",
+        defaultValue: "168",
+        docsUrl: `${DOCS}ui/configuration#runtime-tokens`,
+      },
+      {
+        key: "RUNTIME_CONTROLLER_TOKEN_TTL_DAYS",
+        label: "Controller token lifetime",
+        description:
+          "Lifetime for new remote controller tokens. Minting revokes the previous token.",
+        kind: "number",
+        unit: "days",
+        defaultValue: "90",
+        docsUrl: `${DOCS}ui/configuration#remote-controllers`,
+      },
       {
         key: "RBAC_ENABLED",
         label: "Enable RBAC",

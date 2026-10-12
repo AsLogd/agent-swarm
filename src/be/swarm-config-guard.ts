@@ -31,14 +31,16 @@ const RESERVED_KEYS = new Set([
 ]);
 
 /** Config rows owned by dedicated API surfaces, not the generic config API. */
-export const INTERNAL_CONFIG_KEYS = new Set(["onboarding_state"]);
+export const INTERNAL_CONFIG_KEYS = new Set(["onboarding_state", "runtime_owner_id"]);
 
 export function isInternalConfigKey(key: string): boolean {
   return INTERNAL_CONFIG_KEYS.has(key.toLowerCase());
 }
 
 export function internalConfigKeyError(key: string): Error {
-  return new Error(`Key '${key}' is managed by /api/onboarding`);
+  const owner =
+    key.toLowerCase() === "runtime_owner_id" ? "the runtime supervisor" : "/api/onboarding";
+  return new Error(`Key '${key}' is managed by ${owner}`);
 }
 
 export function isReservedConfigKey(key: string): boolean {
@@ -204,7 +206,53 @@ function validateFloatRange(
   return null;
 }
 
+export function validateRuntimeTokenTtlHours(value: unknown): string | null {
+  const hours = Number(value);
+  return typeof value === "string" && Number.isFinite(hours) && hours > 0 && hours <= 168
+    ? null
+    : "Invalid RUNTIME_TOKEN_TTL_HOURS (must be greater than zero and at most 168)";
+}
+
+export const validateControllerTokenTtlDays = boundedIntegerValidators(
+  ["RUNTIME_CONTROLLER_TOKEN_TTL_DAYS"],
+  1,
+  3650,
+).RUNTIME_CONTROLLER_TOKEN_TTL_DAYS!;
+
+export const validateControllerGraceSec = boundedIntegerValidators(
+  ["RUNTIME_CONTROLLER_GRACE_SEC"],
+  0,
+  86_400,
+).RUNTIME_CONTROLLER_GRACE_SEC!;
+
 const VALIDATED_KEYS: Record<string, ConfigValidator> = {
+  ...booleanValidators(["RUNTIME_POOLS_ENABLED"]),
+  ...enumValidator("RUNTIME_DEFAULT_DELIVERY", ["poll", "push"]),
+  RUNTIME_TOKEN_TTL_HOURS: validateRuntimeTokenTtlHours,
+  RUNTIME_CONTROLLER_TOKEN_TTL_DAYS: validateControllerTokenTtlDays,
+  RUNTIME_CONTROLLER_GRACE_SEC: validateControllerGraceSec,
+  ...integerValidators(
+    [
+      "RUNTIME_SUPERVISOR_INTERVAL_MS",
+      "RUNTIME_PROVISION_TIMEOUT_SEC",
+      "RUNTIME_PROVISION_CONCURRENCY",
+      "RUNTIME_PER_TASK_EXIT_GRACE_SEC",
+      "RUNTIME_PROVISION_MAX_ATTEMPTS",
+      "RUNTIME_CIRCUIT_THRESHOLD",
+      "RUNTIME_CIRCUIT_OPEN_MIN",
+      "RUNTIME_TOKEN_ROTATE_BEFORE_MIN",
+      "RUNTIME_LEASE_RENEW_BEFORE_SEC",
+      "RUNTIME_E2B_BUILD_TIMEOUT_SEC",
+      "RUNTIME_ROTATE_BEFORE_SEC",
+      "E2B_MAX_CONTINUOUS_SEC",
+    ],
+    1,
+  ),
+  ...integerValidators(["RUNTIME_SOCKET_GRACE_SEC"], 0),
+  ...integerValidators(
+    ["RUNTIME_WAKE_GRACE_SEC", "RUNTIME_WAKE_REROUTE_SEC", "RUNTIME_ROUTING_INTERVAL_MS"],
+    0,
+  ),
   TASK_TOOL_MANIFESTS: (value) => {
     try {
       if (typeof value !== "string") throw new Error("Expected JSON string");
