@@ -1,10 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { useUpsertConfig } from "@/api/hooks/use-config-api";
+import { toast } from "sonner";
+import { useConfigs, useUpsertConfig } from "@/api/hooks/use-config-api";
 import { useEnvPresence, useReloadConfig } from "@/api/hooks/use-integrations-meta";
 import { useOnboardingOwnsFirstRun } from "@/api/hooks/use-onboarding";
+import { useSetUsedByConsent } from "@/api/hooks/use-org-profile";
 import { type PopupDismissMethod, useUiTelemetry } from "@/api/hooks/use-ui-telemetry";
 import { useStatusContext } from "@/app/status-context";
+import { ImagePreview } from "@/components/shared/image-preview";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,8 +23,16 @@ import { useCurrentUser } from "@/contexts/current-user-context";
 import { useConfig } from "@/hooks/use-config";
 import { markPromptShownThisLoad } from "@/hooks/use-other-dialog-open";
 import { isAdminLike } from "@/lib/user-role";
+import { cn } from "@/lib/utils";
+import {
+  isFilledOrgLogoUrl,
+  normalizeOrgWebsite,
+  orgLogoUrl,
+  websiteSuggestion,
+} from "../../../../../src/utils/org-website";
 
 const ORG_NAME_KEY = "SWARM_ORG_NAME";
+const ORG_WEBSITE_KEY = "SWARM_ORG_WEBSITE";
 
 export function OrganizationNameDialog() {
   const { config, pendingConnection } = useConfig();
@@ -33,7 +44,11 @@ export function OrganizationNameDialog() {
   const onboardingOwnsName = useOnboardingOwnsFirstRun();
   const upsert = useUpsertConfig();
   const reload = useReloadConfig();
+  const { data: globalConfigs } = useConfigs({ scope: "global" });
+  const setUsedBy = useSetUsedByConsent();
   const [name, setName] = useState("");
+  const [website, setWebsite] = useState("");
+  const [usedBy, setUsedByChecked] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +86,8 @@ export function OrganizationNameDialog() {
   }, [open, config.apiUrl]);
 
   // Wait for /status: sendEvent drops events until it knows whether telemetry is on.
-  const statusLoaded = useStatusContext().data !== undefined;
+  const status = useStatusContext().data;
+  const statusLoaded = status !== undefined;
   useEffect(() => {
     if (!open || !statusLoaded || shownReported.current) return;
     shownReported.current = true;
@@ -91,13 +107,34 @@ export function OrganizationNameDialog() {
     setDismissed(true);
   }
 
+  const suggestion = websiteSuggestion(
+    globalConfigs?.find((entry) => entry.key === "telemetry_org_domain")?.value,
+  );
+  const host = normalizeOrgWebsite(website);
+  const websiteError =
+    website.trim() && !host ? "Enter a public website, such as example.com." : null;
+  const canConsent = Boolean(name.trim() && host);
+  // The logo the shell will show after save: a logo a person set stays; otherwise
+  // the server fills it from the website.
+  const currentLogo = status?.identity.logo_url ?? "";
+  const previewLogo =
+    currentLogo && !isFilledOrgLogoUrl(currentLogo) ? currentLogo : host ? orgLogoUrl(host) : "";
+
   async function handleSave() {
     const value = name.trim();
-    if (!value || saving) return;
+    if (!value || saving || websiteError) return;
     setSaving(true);
     setError(null);
     try {
       await upsert.mutateAsync({ scope: "global", key: ORG_NAME_KEY, value, isSecret: false });
+      if (host) {
+        await upsert.mutateAsync({
+          scope: "global",
+          key: ORG_WEBSITE_KEY,
+          value: host,
+          isSecret: false,
+        });
+      }
       // Older APIs do not auto-reload global writes. Apply the persisted name
       // to the running server so status and telemetry see it immediately.
       await reload.mutateAsync();
@@ -105,6 +142,16 @@ export function OrganizationNameDialog() {
         event: "popup.submitted",
         properties: { popup: "org_name", has_message: false, has_contact: false },
       });
+      sendEvent({
+        event: "org.profile_updated",
+        properties: { fields: host ? ["name", "website"] : ["name"], surface: "prompt" },
+      });
+      if (usedBy && canConsent) {
+        // An explicit opt-in: a failure here must not lose the saved name.
+        await setUsedBy.mutateAsync(true).catch(() => {
+          toast.error("Saved. The logo consent did not go through; try again in Settings.");
+        });
+      }
       setDismissed(true);
     } catch {
       setError("Could not apply your organization name. Please try again.");
@@ -152,6 +199,44 @@ export function OrganizationNameDialog() {
               disabled={saving}
             />
           </SettingsRow>
+          <SettingsRow
+            label="Company website (optional)"
+            htmlFor="organization-website"
+            helper={
+              websiteError ? (
+                <span className="text-status-error-strong">{websiteError}</span>
+              ) : undefined
+            }
+          >
+            <div className="flex items-center gap-2">
+              <ImagePreview src={previewLogo} label="Company logo" />
+              <Input
+                id="organization-website"
+                placeholder={suggestion ?? "example.com"}
+                autoComplete="url"
+                inputMode="url"
+                value={website}
+                onChange={(event) => setWebsite(event.target.value)}
+                aria-invalid={websiteError !== null}
+                disabled={saving}
+              />
+            </div>
+          </SettingsRow>
+          <label
+            className={cn(
+              "flex items-start gap-2 text-sm leading-relaxed",
+              !canConsent && "text-muted-foreground",
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={usedBy && canConsent}
+              disabled={!canConsent || saving}
+              onChange={(event) => setUsedByChecked(event.target.checked)}
+              className="mt-0.5 size-4 rounded border-input accent-primary"
+            />
+            <span>Show our logo on agent-swarm.dev as a company that uses Agent Swarm</span>
+          </label>
           {error && (
             <p role="alert" className="text-sm text-status-error-strong">
               {error}
@@ -161,7 +246,7 @@ export function OrganizationNameDialog() {
             <Button type="button" variant="outline" onClick={() => dismiss("later")}>
               Later
             </Button>
-            <Button type="submit" disabled={saving || !name.trim()}>
+            <Button type="submit" disabled={saving || !name.trim() || websiteError !== null}>
               {saving ? "Saving..." : "Save organization name"}
             </Button>
           </DialogFooter>
