@@ -46,6 +46,22 @@ const TIMEOUT_MS = 5_000;
 
 let installationId: string | null = null;
 let installedAt: string | null = null;
+/** An event the ingest endpoint answered with 2xx. */
+export interface TelemetryIngested {
+  installationId: string;
+  occurredAt: string;
+}
+let ingestObserver: ((ingested: TelemetryIngested) => void) | null = null;
+
+/**
+ * Called after each event the ingest endpoint accepted from this process.
+ * The API server registers it to record the proxy's observation start.
+ */
+export function setTelemetryIngestObserver(
+  observer: ((ingested: TelemetryIngested) => void) | null,
+): void {
+  ingestObserver = observer;
+}
 /** Org ID resolved at init (env, then `telemetry_org_id`). `SWARM_ORG_ID` is re-read per event. */
 let cachedOrgId: string | undefined;
 /** Email domain of the org's admin, set by the API server (`setTelemetryOrgDomain`). */
@@ -619,6 +635,8 @@ function emit(
   const orgId = currentOrgId();
   if (!orgId) return;
   try {
+    const occurredAt = new Date().toISOString();
+    const sentFor = installationId;
     const isCloud = cachedIsCloud || isCloudDeployment();
     const orgIdentity = getOrgIdentity();
     const userId = actor?.userId?.trim() || undefined;
@@ -626,7 +644,7 @@ function emit(
       schema_version: 2 as const,
       product: PRODUCT,
       event,
-      occurred_at: new Date().toISOString(),
+      occurred_at: occurredAt,
       source: emitter,
       actor_mode: "anonymous" as const,
       actor_anonymous_id: installationId,
@@ -694,7 +712,11 @@ function emit(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(TIMEOUT_MS),
-    }).catch(() => {});
+    })
+      .then((response) => {
+        if (response.ok) ingestObserver?.({ installationId: sentFor, occurredAt });
+      })
+      .catch(() => {});
   } catch {
     // Never throw
   }
@@ -707,6 +729,7 @@ function emit(
 export function _resetTelemetryStateForTests(): void {
   installationId = null;
   installedAt = null;
+  ingestObserver = null;
   source = "unknown";
   cachedIsCloud = false;
   cachedIsE2b = false;

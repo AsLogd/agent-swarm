@@ -8,7 +8,8 @@
  * (`via: banner`) or any config reload (`via: settings`). Each off-to-on
  * transition sends `telemetry.enabled` once.
  */
-import { initTelemetry, isTelemetryEnabled, track } from "../telemetry";
+import { initTelemetry, isTelemetryEnabled, setTelemetryIngestObserver, track } from "../telemetry";
+import { telemetryIngestRecorder } from "./telemetry-ingest-anchor";
 
 type GetConfig = (key: string) => Promise<string | undefined>;
 type SetConfig = (key: string, value: string) => Promise<void>;
@@ -24,6 +25,11 @@ let lastEnabled = false;
  */
 export async function initApiTelemetry(getConfig: GetConfig, setConfig: SetConfig): Promise<void> {
   accessors = { getConfig, setConfig };
+  // Accepted events anchor the fleet benchmark (see telemetry-ingest-anchor).
+  const recordIngest = telemetryIngestRecorder();
+  setTelemetryIngestObserver((ingested) => {
+    recordIngest(ingested).catch(() => {});
+  });
   lastEnabled = isTelemetryEnabled();
   if (!lastEnabled) return;
   let hadInstallId = true;
