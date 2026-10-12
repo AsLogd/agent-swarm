@@ -1,8 +1,10 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useUpsertConfig } from "@/api/hooks/use-config-api";
 import { useEnvPresence, useReloadConfig } from "@/api/hooks/use-integrations-meta";
 import { useOnboardingOwnsFirstRun } from "@/api/hooks/use-onboarding";
+import { type PopupDismissMethod, useUiTelemetry } from "@/api/hooks/use-ui-telemetry";
+import { useStatusContext } from "@/app/status-context";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,6 +38,9 @@ export function OrganizationNameDialog() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mountedAt] = useState(Date.now);
+  const sendEvent = useUiTelemetry();
+  const shownReported = useRef(false);
+  const closeMethod = useRef<PopupDismissMethod>("close");
 
   // Only an explicit false establishes that the server has no name. Older
   // servers can fail this optional query or omit the key; neither blocks the UI.
@@ -65,7 +70,19 @@ export function OrganizationNameDialog() {
     if (open) markPromptShownThisLoad(config.apiUrl);
   }, [open, config.apiUrl]);
 
-  function dismiss() {
+  // Wait for /status: sendEvent drops events until it knows whether telemetry is on.
+  const statusLoaded = useStatusContext().data !== undefined;
+  useEffect(() => {
+    if (!open || !statusLoaded || shownReported.current) return;
+    shownReported.current = true;
+    sendEvent({
+      event: "popup.shown",
+      properties: { popup: "org_name", trigger: "missing_org_name" },
+    });
+  }, [open, statusLoaded, sendEvent]);
+
+  function dismiss(method: PopupDismissMethod) {
+    sendEvent({ event: "popup.dismissed", properties: { popup: "org_name", method } });
     try {
       sessionStorage.setItem(laterKey, "1");
     } catch {
@@ -84,6 +101,10 @@ export function OrganizationNameDialog() {
       // Older APIs do not auto-reload global writes. Apply the persisted name
       // to the running server so status and telemetry see it immediately.
       await reload.mutateAsync();
+      sendEvent({
+        event: "popup.submitted",
+        properties: { popup: "org_name", has_message: false, has_contact: false },
+      });
       setDismissed(true);
     } catch {
       setError("Could not apply your organization name. Please try again.");
@@ -93,8 +114,19 @@ export function OrganizationNameDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && dismiss()}>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) return;
+        dismiss(closeMethod.current);
+        closeMethod.current = "close";
+      }}
+    >
+      <DialogContent
+        onEscapeKeyDown={() => {
+          closeMethod.current = "escape";
+        }}
+      >
         <form
           className="space-y-4"
           onSubmit={(event) => {
@@ -126,7 +158,7 @@ export function OrganizationNameDialog() {
             </p>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={dismiss}>
+            <Button type="button" variant="outline" onClick={() => dismiss("later")}>
               Later
             </Button>
             <Button type="submit" disabled={saving || !name.trim()}>
