@@ -4375,7 +4375,8 @@ export async function releaseStaleMentionProcessing(timeoutMinutes: number = 30)
 }
 
 // ============================================================================
-// Service Operations (PM2/background services)
+// Service Operations (removed PM2 service registry; the table and these
+// accessors stay until a drop migration lands)
 // ============================================================================
 
 type ServiceRow = {
