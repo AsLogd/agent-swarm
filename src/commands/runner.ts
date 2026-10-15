@@ -82,6 +82,7 @@ import { getContextWindowSize } from "../utils/context-window.ts";
 import {
   type CredentialSelection,
   ModelWindowExhaustedError,
+  normalizeProviderKeyAliases,
   resolveCredentialPools,
 } from "../utils/credentials.ts";
 import { resolveCodexCreditsExhaustedCooldownMs } from "../utils/error-tracker.ts";
@@ -91,7 +92,11 @@ import { prettyPrintLine, prettyPrintStderr } from "../utils/pretty-print.ts";
 import { terminateRegisteredProcessGroups } from "../utils/process-group.ts";
 import { refreshRuntimeModelCatalog } from "../utils/runtime-model-catalog.ts";
 import { resolveScriptsOnlyMode } from "../utils/scripts-only-mode.ts";
-import { registerSensitiveKeyName, scrubSecrets } from "../utils/secret-scrubber.ts";
+import {
+  registerEnvSecrets,
+  registerSensitiveKeyName,
+  scrubSecrets,
+} from "../utils/secret-scrubber.ts";
 import { refreshSkillsIfChanged } from "../utils/skills-refresh.ts";
 import { guardSpawnModel } from "../utils/spawn-model-guard.ts";
 import { isSteeringEnabled } from "../utils/steering-enabled.ts";
@@ -1004,6 +1009,16 @@ export async function fetchResolvedEnv(
       console.warn(`[env-reload] Could not fetch config, using current env: ${error}`);
     }
   }
+
+  // Registry key aliases (`HELMCODE_API_NAN` for `NAN_API_KEY`) are copied
+  // into their canonical var once here, so pooling, credential checks, pi's
+  // runtime key and the opencode key splice only ever read the canonical
+  // name. An explicit canonical value wins.
+  normalizeProviderKeyAliases(env);
+  // Rows admitted after boot and pool members live only in this env, never in
+  // process.env, so the scrubber's env pass cannot see them. Register them
+  // before any adapter can echo one into a log or failure reason.
+  registerEnvSecrets(env);
 
   // A task already has an adapter. Repository configuration must not select
   // credentials or configure hooks for a different harness.

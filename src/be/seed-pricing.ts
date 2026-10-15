@@ -19,6 +19,7 @@
  * admin route (`POST /api/pricing`) — we don't overwrite seed rows.
  */
 
+import { openAICompatibleProviderIds } from "@desplega/model-catalog";
 import type { PricingProvider, PricingTokenClass } from "../types";
 import { getDb } from "./db";
 import {
@@ -365,6 +366,21 @@ export function buildModelsDevSeedRows(cache: ModelsDevCache): PricingSeedRow[] 
       // Also store under the full openrouter id so the same row resolves
       // whether the caller passes "google/..." or the stripped name.
       add(id, projectCostBlock("gemini", id, model.cost));
+    }
+  }
+
+  // ---- OpenAI-compatible registry providers ($0 flat-rate subscriptions) --
+  // pi and opencode run these as `<provider>/<id>`. The models.dev `nan`
+  // section and the registry-synthesized `helmcode` section
+  // (`withRegistryCatalogSections`) carry cost {0, 0}, so the sessions price
+  // as `pricing-table` at $0 instead of `unpriced`. The provider prefix stays
+  // in the key: `nan/qwen3.6` and `helmcode/qwen3.6` are separate rows.
+  for (const provider of openAICompatibleProviderIds()) {
+    for (const [id, model] of Object.entries(cache[provider]?.models ?? {})) {
+      if (!model?.cost) continue;
+      const key = `${provider}/${id}`;
+      add(key, projectCostBlock("pi", key, model.cost));
+      add(key, projectCostBlock("opencode", key, model.cost));
     }
   }
 

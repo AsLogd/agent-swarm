@@ -10,6 +10,13 @@
 //
 // See plan: thoughts/taras/plans/2026-04-21-integrations-ui.md (Phase 1).
 
+import {
+  baseUrlEnvVar,
+  type OpenAICompatibleProviderId,
+  openAICompatibleProviders,
+} from "@desplega/model-catalog";
+import type { ProviderIconKey } from "./agent-runtime-models";
+
 export type IntegrationFieldType = "text" | "password" | "textarea" | "select" | "boolean";
 
 export interface IntegrationField {
@@ -114,6 +121,11 @@ export interface IntegrationDef {
   iconKey: string;
   /** Optional brand/logo asset path. Falls back to iconKey when unset. */
   logoSrc?: string;
+  /**
+   * Optional `ProviderIcon` glyph (an original drawing, not a vendor mark).
+   * Wins over `logoSrc` and `iconKey` when set.
+   */
+  providerIconKey?: ProviderIconKey;
   /** External docs URL or in-repo docs path. */
   docsUrl: string;
   fields: IntegrationField[];
@@ -150,6 +162,57 @@ export function getIntegrationFields(def: IntegrationDef): IntegrationField[] {
     fields.push(field);
   }
   return fields;
+}
+
+/** Docs section that covers every OpenAI-compatible registry provider. */
+const OPENAI_COMPATIBLE_DOCS_URL =
+  "https://docs.agent-swarm.dev/docs/guides/harness-configuration#nan-and-helmcode";
+
+/**
+ * One integration card per OpenAI-compatible registry provider
+ * (`@desplega/model-catalog`): its key (a credential pool) and its optional
+ * `<ID>_BASE_URL`. No restart: pi and opencode read both from the per-task
+ * env the runner fetches before each task, so a saved value applies on the
+ * next task.
+ */
+function openAICompatibleIntegrations(): IntegrationDef[] {
+  return openAICompatibleProviders().map((p) => {
+    const aliases =
+      p.aliasEnvVars.length > 0 ? ` ${p.aliasEnvVars.join(" and ")} is accepted as an alias.` : "";
+    return {
+      id: p.id,
+      name: p.displayName,
+      description: p.description,
+      category: "llm",
+      iconKey: "route",
+      providerIconKey: p.id as OpenAICompatibleProviderId,
+      docsUrl: OPENAI_COMPATIBLE_DOCS_URL,
+      restartRequired: false,
+      fields: [
+        {
+          key: p.envVar,
+          label: "API key",
+          type: "password",
+          required: true,
+          isSecret: true,
+          placeholder: "sk-...",
+          helpText: `${p.displayName} API key for \`${p.id}/<model>\` on pi and opencode.${aliases}${
+            p.keyNote ? ` ${p.keyNote}` : ""
+          } Comma-separate multiple keys to form a credential pool.`,
+          credentialPool: true,
+        },
+        {
+          key: baseUrlEnvVar(p),
+          label: "Base URL",
+          type: "text",
+          isSecret: false,
+          placeholder: p.baseUrl,
+          helpText: `OpenAI-compatible API root. Leave blank for ${p.baseUrl}.`,
+          advanced: true,
+        },
+      ],
+    };
+  });
 }
 
 export const INTEGRATIONS: IntegrationDef[] = [
@@ -860,6 +923,10 @@ export const INTEGRATIONS: IntegrationDef[] = [
       },
     ],
   },
+
+  // ------------------------------------- OpenAI-compatible registry providers
+  // NaN, Helmcode, ...: one card per `@desplega/model-catalog` registry entry.
+  ...openAICompatibleIntegrations(),
 
   // ---------------------------------------------------------------- OpenAI
   {
