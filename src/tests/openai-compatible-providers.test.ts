@@ -105,7 +105,9 @@ describe("openai-compatible provider table", () => {
       const section = merged[id];
       expect(section).toBeDefined();
       if (!section) return;
-      expect(section.api).toBe(entry.baseUrl);
+      // OpenCode's built-in AI Gateway SDK has no OpenAI-compatible `api` URL.
+      if (entry.npm === "@ai-sdk/gateway") expect(section.api).toBeUndefined();
+      else expect(section.api).toBe(entry.baseUrl);
       expect(section.env).toEqual([entry.envVar]);
       expect(section.npm).toBe(entry.npm);
       for (const model of entry.models) {

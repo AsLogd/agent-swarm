@@ -104,3 +104,12 @@ describe("Chat SDK status", () => {
     expect(deriveIntegrationStatus(chat, [], env)).toBe("configured");
   });
 });
+
+describe("OpenAI-compatible provider cards", () => {
+  test("Vercel AI Gateway has a key field and no base URL field; NaN keeps its override", () => {
+    const keys = (id: string) =>
+      (INTEGRATIONS.find((candidate) => candidate.id === id)?.fields ?? []).map((f) => f.key);
+    expect(keys("vercel")).toEqual(["AI_GATEWAY_API_KEY"]);
+    expect(keys("nan")).toEqual(["NAN_API_KEY", "NAN_BASE_URL"]);
+  });
+});

@@ -201,15 +201,20 @@ function openAICompatibleIntegrations(): IntegrationDef[] {
           } Comma-separate multiple keys to form a credential pool.`,
           credentialPool: true,
         },
-        {
-          key: baseUrlEnvVar(p),
-          label: "Base URL",
-          type: "text",
-          isSecret: false,
-          placeholder: p.baseUrl,
-          helpText: `OpenAI-compatible API root. Leave blank for ${p.baseUrl}.`,
-          advanced: true,
-        },
+        // A locked provider has one endpoint: no field, so no wrong URL to type.
+        ...(p.baseUrlLocked
+          ? []
+          : [
+              {
+                key: baseUrlEnvVar(p),
+                label: "Base URL",
+                type: "text" as const,
+                isSecret: false,
+                placeholder: p.baseUrl,
+                helpText: `OpenAI-compatible API root. Leave blank for ${p.baseUrl}.`,
+                advanced: true,
+              },
+            ]),
       ],
     };
   });
