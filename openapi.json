@@ -7181,6 +7181,13 @@
                         "createdAt",
                         "updatedAt"
                       ]
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Advisory quickjs-executor compatibility findings for the app's scripts."
                     }
                   },
                   "required": [
@@ -7687,6 +7694,13 @@
                         "orphanFields",
                         "userConfigChanged"
                       ]
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Advisory quickjs-executor compatibility findings for the app's scripts."
                     }
                   },
                   "required": [
@@ -8205,6 +8219,13 @@
                         "orphanFields",
                         "userConfigChanged"
                       ]
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Advisory quickjs-executor compatibility findings for the app's scripts."
                     }
                   },
                   "required": [
@@ -8559,6 +8580,13 @@
                         "orphanFields",
                         "userConfigChanged"
                       ]
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Advisory quickjs-executor compatibility findings for the app's scripts."
                     }
                   },
                   "required": [
@@ -49713,6 +49741,13 @@
                     },
                     "contentDeduped": {
                       "type": "boolean"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Advisory quickjs-executor compatibility findings. Never blocks the save."
                     }
                   },
                   "required": [
@@ -50809,6 +50844,13 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "warnings": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Advisory quickjs-executor compatibility findings for the script."
                         }
                       },
                       "required": [

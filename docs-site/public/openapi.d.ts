@@ -793,6 +793,8 @@ export interface paths {
                                 createdAt: string;
                                 updatedAt: string;
                             };
+                            /** @description Advisory quickjs-executor compatibility findings for the app's scripts. */
+                            warnings?: string[];
                         };
                     };
                 };
@@ -1017,6 +1019,8 @@ export interface paths {
                                 orphanFields: string[];
                                 userConfigChanged: string[];
                             };
+                            /** @description Advisory quickjs-executor compatibility findings for the app's scripts. */
+                            warnings?: string[];
                         };
                     };
                 };
@@ -1202,6 +1206,8 @@ export interface paths {
                                 orphanFields: string[];
                                 userConfigChanged: string[];
                             };
+                            /** @description Advisory quickjs-executor compatibility findings for the app's scripts. */
+                            warnings?: string[];
                         };
                     };
                 };
@@ -1358,6 +1364,8 @@ export interface paths {
                                 orphanFields: string[];
                                 userConfigChanged: string[];
                             };
+                            /** @description Advisory quickjs-executor compatibility findings for the app's scripts. */
+                            warnings?: string[];
                         };
                     };
                 };
@@ -29348,6 +29356,8 @@ export interface operations {
                         name: string;
                         version: number;
                         contentDeduped: boolean;
+                        /** @description Advisory quickjs-executor compatibility findings. Never blocks the save. */
+                        warnings?: string[];
                     };
                 };
             };
@@ -29858,6 +29868,8 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ScriptApiRecord"] & {
                         token: string | null;
+                        /** @description Advisory quickjs-executor compatibility findings for the script. */
+                        warnings?: string[];
                     };
                 };
             };
