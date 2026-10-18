@@ -92,6 +92,8 @@ export interface DataGridProps<TData> {
   pagination?: boolean;
   paginationQueryKey?: string;
   className?: string;
+  /** Extra classes for the pager row, e.g. padding when the grid sits flush in a panel. */
+  pagerClassName?: string;
   domLayout?: "normal" | "autoHeight";
   enableCellTextSelection?: boolean;
   getRowId?: (params: GetRowIdParams<TData>) => string;
@@ -145,6 +147,7 @@ export function DataGrid<TData>({
   pagination: paginationEnabled = true,
   paginationQueryKey,
   className,
+  pagerClassName,
   domLayout = "normal",
   enableCellTextSelection = false,
   getRowId,
@@ -267,13 +270,10 @@ export function DataGrid<TData>({
 
   const onGridReady = useCallback(
     (event: GridReadyEvent<TData>) => {
-      if (loading) {
-        event.api.showLoadingOverlay();
-      }
       if (columnSizing === "fit") event.api.sizeColumnsToFit();
       syncGridPaginationFromUrl(event);
     },
-    [columnSizing, loading, syncGridPaginationFromUrl],
+    [columnSizing, syncGridPaginationFromUrl],
   );
 
   const onPaginationChanged = useCallback(
@@ -332,11 +332,16 @@ export function DataGrid<TData>({
     return () => observer.disconnect();
   }, []);
 
-  // Hiding or showing columns changes the total width, so re-fit them.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `hiddenCount` is the trigger
+  // Hiding or showing columns changes the total width, so re-fit them. A container resize
+  // (e.g. the app sidebar collapsing) re-fits too, but AG Grid has not applied the new body
+  // width or column set yet at that point, so refit once more on the next frame.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `hiddenCount` and `containerWidth` are the triggers
   useEffect(() => {
-    if (columnSizing === "fit") gridRef.current?.api?.sizeColumnsToFit();
-  }, [hiddenCount, columnSizing]);
+    if (columnSizing !== "fit") return;
+    gridRef.current?.api?.sizeColumnsToFit();
+    const frame = requestAnimationFrame(() => gridRef.current?.api?.sizeColumnsToFit());
+    return () => cancelAnimationFrame(frame);
+  }, [hiddenCount, containerWidth, columnSizing]);
 
   return (
     <div
@@ -380,6 +385,7 @@ export function DataGrid<TData>({
           pageSize={pager.pageSize}
           total={pager.total}
           pageSizeOptions={paginationPageSizeSelector}
+          className={pagerClassName}
           onPageChange={(page) => gridRef.current?.api?.paginationGoToPage(page)}
           onPageSizeChange={(size) =>
             gridRef.current?.api?.setGridOption("paginationPageSize", size)
