@@ -19,8 +19,9 @@ import {
 } from "../utils/org-identity";
 import { ensureConfigAdmin } from "./config";
 import { scheduleIntegrationsReload } from "./core";
+import { globalConfig } from "./global-config";
 import { route } from "./route-def";
-import { globalConfig, telemetryProxyEndpoint } from "./used-by";
+import { telemetryProxyEndpoint } from "./used-by";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 

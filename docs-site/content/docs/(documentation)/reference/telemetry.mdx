@@ -152,7 +152,12 @@ And these to `metadata`:
 | `swarm_version` | The Agent Swarm version | `package.json`. |
 | `install_method` | How the install was produced | Same as the property of the same name. |
 | `install_preset` | The onboard wizard preset | Same as the `metadata` field. `null` when there is none. |
-| `acquisition_source` | Reserved | Always `null` today. |
+| `acquisition_source` | How the organization discovered Agent Swarm | `SWARM_ORG_ACQUISITION_SOURCE`: `search`, `github`, `social`, `colleague`, `newsletter`, `event`, `ai_assistant`, `hacker_news`, or `other`. `null` when unset or invalid. |
+| `team_size` | The organization's team size | `SWARM_ORG_TEAM_SIZE`: `1`, `2-10`, `11-50`, or `51+`. Omitted when unset or invalid. |
+| `use_case` | The organization's main use case | `SWARM_ORG_USE_CASE`: `features`, `bugs`, `review`, `ops`, `docs`, or `data`. Omitted when unset or invalid. |
+| `user_function` | The actor's job function, separate from RBAC role | `users.metadata.jobFunction`: `engineer`, `eng_lead`, `founder`, `product`, `ops`, or `other`. Cached with the RBAC role and invalidated after user updates. Omitted without an actor or a valid function. |
+
+Workers receive company profile settings through the resolved configuration at boot and during reload. They read `telemetry_org_domain` through the API. Workers do not query users for job functions. The API resolves those functions for events with user actors.
 
 What is never sent: email addresses (only the domain of one address), user names, raw user IDs, task content, prompts or outputs.
 
@@ -180,13 +185,21 @@ The dashboard never sends telemetry to Desplega itself. It posts each event to i
 | `fleet_benchmark.viewed` | The "Your swarm vs. similar swarms" card shows on Home, at most once per page load | `has_org_name` |
 | `popup.submitted` | It is submitted | `popup`, `has_message` and `has_contact`: whether a message or a name or email was filled in, never the text. The feedback card adds the 0-10 `score` |
 
-`telemetry.enabled` (`via`: `banner`, `settings` or `env`) is sent by the API server once per opt-in: on the first boot of an install with telemetry on, or when someone turns telemetry back on from the dashboard banner or the Configuration page. Turning it on that way applies without a restart.
+`telemetry.enabled` (`via`: `banner`, `settings`, `benchmark` or `env`) is sent by the API server once per opt-in: on the first boot of an install with telemetry on, or when someone turns telemetry back on from the dashboard banner, the Home benchmark card, or the Configuration page. Turning it on that way applies without a restart.
 
 While telemetry is off, admins see a dashboard banner that explains what turning it on sends. It cannot report that it was shown, since telemetry is off. After "Dismiss" it never comes back.
 
 ### Fleet benchmark
 
-With telemetry on and an organization name set, Home shows how this swarm compares with similar swarms over the last 30 days: tasks per week and task success rate, against swarms with the same number of agents when at least 20 exist, otherwise against all active swarms. The API reads the fleet percentiles from `GET https://proxy.desplega.sh/v1/fleet/benchmarks` at most once a day. That request carries no installation ID or organization name, and the answer holds only aggregates over at least 20 installs with 10 or more finished tasks. With telemetry off, the API never makes the request. The comparison itself is computed locally, so this swarm's own numbers never leave it for the benchmark.
+With telemetry on and an organization name set, Home compares this swarm with other swarms over the last 30 days. It compares tasks per week and task success rate. The API reads fleet percentiles from `GET https://proxy.desplega.sh/v1/fleet/benchmarks` at most once a day.
+
+When the swarm stores a website, team size, and use case, the API sends `team_size` and `use_case` to the proxy. The proxy compares against that peer group only when it meets the same minimum of 20 installs as the whole fleet. Otherwise, it uses the whole fleet. Within the selected fleet, comparisons use the same agent-count bucket when at least 20 installs qualify, otherwise all qualifying installs.
+
+The request carries no installation ID or organization name. The response contains aggregates over at least 20 installs with 10 or more finished tasks. With telemetry off, the API never makes the request. The API computes the comparison locally, so this swarm's own numbers never leave it for the benchmark.
+
+`GET /api/fleet-benchmark` adds `level` and `peerGroup` to its existing response. Level is `full` when website, team size, and use case are set. Otherwise, level is `basic`. Full requests include `team_size` and `use_case` query parameters. The fleet cache key includes these peer filters.
+
+`peerGroup` contains `{teamSize, useCase, orgs}` when the proxy returns a matching group. It is null when the proxy returns the whole fleet or omits `peer_group`. With telemetry off, `local` contains DB counts for the last 30 days, without a proxy request or ingest requirement. Existing comparisons still require a known proxy ingest date.
 
 ### Public ranking
 
