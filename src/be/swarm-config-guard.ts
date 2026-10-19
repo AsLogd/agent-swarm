@@ -143,7 +143,7 @@ export const DB_RETENTION_TUNING_BOUNDS = {
  * Bounds for the Swarm Apps json column size cap (`APPS_JSON_COLUMN_MAX_BYTES`).
  *
  * `src/apps/definition.ts` reads the knob against exactly these at call time
- * and falls back to its 256 KiB default outside them; VALIDATED_KEYS below
+ * and falls back to its 256 KB default outside them; VALIDATED_KEYS below
  * rejects out-of-range writes with the same numbers, so the config API cannot
  * accept a cap the row store would silently ignore.
  */

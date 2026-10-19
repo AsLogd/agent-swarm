@@ -90,7 +90,7 @@ Settings with deeper behavior link out to the relevant guide (for example the [t
 
 `APPROVAL_REQUEST_AUTO_CANCELLATION_DAYS` (default 7) sets how many days a pending approval request with no explicit timeout waits before the heartbeat sets it to `cancelled`. A request with an explicit timeout is never auto-cancelled; it becomes `timeout` when its deadline passes. `0` turns auto-cancellation off.
 
-`APPS_JSON_COLUMN_MAX_BYTES` (default `262144`, 256 KiB) caps the serialized size, in bytes, of a Swarm Apps `json` column value or default. Accepted values run from `1024` through `16777216` (16 MiB); the config API rejects anything else, and the server falls back to the default if the environment carries an out-of-range value. A saved change applies on the next config reload, without a restart. Rows written under a larger cap are not re-checked when the cap is lowered.
+`APPS_JSON_COLUMN_MAX_BYTES` (default `262144`, 256 KB) caps the serialized size, in bytes, of a Swarm Apps `json` column value or default. Accepted values run from `1024` through `16777216` (16 MB); the config API rejects anything else, and the server falls back to the default if the environment carries an out-of-range value. A saved change applies on the next config reload, without a restart. Rows written under a larger cap are not re-checked when the cap is lowered.
 
 ![Editing a configuration group](/ui/configuration-group.png)
 

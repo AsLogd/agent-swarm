@@ -998,7 +998,7 @@ export const CONFIGURATION_GROUPS: ConfigCatalogGroup[] = [
         key: "APPS_JSON_COLUMN_MAX_BYTES",
         label: "App json column size cap",
         description:
-          "Maximum serialized size in bytes of a Swarm Apps json column value or default. Default 262144 (256 KiB); accepts 1024 through 16777216 (16 MiB). Applies on the next config reload.",
+          "Maximum serialized size in bytes of a Swarm Apps json column value or default. Default 262144 (256 KB); accepts 1024 through 16777216 (16 MB). Applies on the next config reload.",
         kind: "number",
         defaultValue: "262144",
         placeholder: "262144",

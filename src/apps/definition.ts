@@ -31,7 +31,7 @@ export function isIso8601Date(value: string): boolean {
   return ISO_8601_PREFIX.test(value) && !Number.isNaN(Date.parse(value));
 }
 
-/** Default serialized-size cap for json column values AND defaults: 256 KiB. */
+/** Default serialized-size cap for json column values AND defaults: 256 KB. */
 export const DEFAULT_JSON_COLUMN_MAX_BYTES = 256 * 1024;
 
 /**
