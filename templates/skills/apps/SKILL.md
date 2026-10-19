@@ -225,7 +225,7 @@ Each column is `{ "kind": ..., "required"?: boolean, "default"?: ..., "index"?: 
 | `boolean` | Boolean; set `index: true` only when equality lookups need it. |
 | `date` | ISO-8601 string; never indexed. |
 | `enum` | String from the non-empty unique `enum` list; always indexed, without `index: true`. |
-| `json` | Any JSON value (object, array, nested) up to 256 KB serialized; never indexed, and a named query cannot `filter` or `sort` on it. Not allowed for `userConfig` fields or element props. |
+| `json` | Any JSON value (object, array, nested) up to 256 KB serialized by default (`APPS_JSON_COLUMN_MAX_BYTES`); never indexed, and a named query cannot `filter` or `sort` on it. Not allowed for `userConfig` fields or element props. |
 
 `default` must match the column kind (and be one of the enum values). `required: true` rejects missing/null values unless a default supplies the value. `id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy` — and the sync envelope `source`, `syncedAt`, `stale` — are system columns and reserved names. An app created before the sync envelope that declared ordinary columns with these names surfaces `definitionError` after upgrade until they are renamed: patch in a fresh column with a `{from}` migration directive, then purge the old one. Rows always expose `id`/`createdAt`/`updatedAt`; `createdBy`/`updatedBy` record the acting principal (`user:<id>`, `agent:<id>`, `operator`, or `sync:<source>` for engine writes) and are system-managed on every row write.
 

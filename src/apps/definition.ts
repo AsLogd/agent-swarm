@@ -2,6 +2,7 @@ import * as z from "zod";
 import { listScriptConnections } from "../be/script-connections";
 import { getScriptById } from "../be/scripts/db";
 import { getSavedScriptOwnerAgentId } from "../be/scripts/run-saved";
+import { APPS_JSON_COLUMN_MAX_BYTES_BOUNDS } from "../be/swarm-config-guard";
 import { checkQuickJSCompat, quickJSCompatWarnings } from "../scripts-runtime/quickjs-compat";
 import catalog from "./catalog.generated.json";
 import {
@@ -30,14 +31,37 @@ export function isIso8601Date(value: string): boolean {
   return ISO_8601_PREFIX.test(value) && !Number.isNaN(Date.parse(value));
 }
 
-/** Serialized-size cap for json column values AND defaults. */
-export const MAX_JSON_COLUMN_BYTES = 256 * 1024;
+/** Default serialized-size cap for json column values AND defaults: 256 KiB. */
+export const DEFAULT_JSON_COLUMN_MAX_BYTES = 256 * 1024;
+
+/**
+ * The serialized-size cap for json column values and defaults, read on every
+ * call — never at module load — so a stored `APPS_JSON_COLUMN_MAX_BYTES`
+ * override, injected over the process env on config reload, applies without
+ * a restart. Mirrors the retention knobs: a non-digit or out-of-range value
+ * falls back to the default, and the config API rejects writes outside the
+ * same `APPS_JSON_COLUMN_MAX_BYTES_BOUNDS`.
+ */
+export function jsonColumnMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.APPS_JSON_COLUMN_MAX_BYTES?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_JSON_COLUMN_MAX_BYTES;
+  const value = Number(raw);
+  const { min, max } = APPS_JSON_COLUMN_MAX_BYTES_BOUNDS;
+  return Number.isSafeInteger(value) && value >= min && value <= max
+    ? value
+    : DEFAULT_JSON_COLUMN_MAX_BYTES;
+}
+
+/** The cap as a message label: whole KB when it divides evenly (`256KB`), else bytes. */
+export function jsonColumnSizeLabel(bytes: number = jsonColumnMaxBytes()): string {
+  return bytes % 1024 === 0 ? `${bytes / 1024}KB` : `${bytes} bytes`;
+}
 
 export type JsonColumnValueIssue = "unserializable" | "non-finite" | "oversized";
 
 /**
  * Why a value cannot live in a json column — not JSON-serializable, carrying a
- * non-finite number anywhere inside it, or over `MAX_JSON_COLUMN_BYTES` once
+ * non-finite number anywhere inside it, or over `jsonColumnMaxBytes()` once
  * serialized — or `null` when it fits. The single implementation of the cap:
  * it serializes exactly once, flagging non-finite numbers on that same walk
  * (a lenient parser turns `1e400` into `Infinity`, which `JSON.stringify`
@@ -57,7 +81,7 @@ export function jsonColumnValueIssue(value: unknown): JsonColumnValueIssue | nul
   }
   if (serialized === undefined) return "unserializable";
   if (nonFinite) return "non-finite";
-  return Buffer.byteLength(serialized, "utf8") > MAX_JSON_COLUMN_BYTES ? "oversized" : null;
+  return Buffer.byteLength(serialized, "utf8") > jsonColumnMaxBytes() ? "oversized" : null;
 }
 
 /**
@@ -156,7 +180,7 @@ const ColumnDefSchema = z
         ctx.addIssue({
           code: "custom",
           path: ["default"],
-          message: "json column default exceeds the 256KB size limit",
+          message: `json column default exceeds the ${jsonColumnSizeLabel()} size limit`,
         });
       }
       return;

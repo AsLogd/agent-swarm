@@ -5,6 +5,7 @@ import {
   type AppValidationIssue,
   type ColumnDef,
   isValidColumnValue,
+  jsonColumnSizeLabel,
   jsonColumnValueIssue,
   type ModelDef,
 } from "./definition";
@@ -191,7 +192,10 @@ function prepareValues(
       } else if (issue === "non-finite") {
         issues.push({ path: `values.${name}`, message: "json value contains a non-finite number" });
       } else if (issue === "oversized") {
-        issues.push({ path: `values.${name}`, message: "json value exceeds the 256KB size limit" });
+        issues.push({
+          path: `values.${name}`,
+          message: `json value exceeds the ${jsonColumnSizeLabel()} size limit`,
+        });
       }
     } else if (!validValue(column, value)) {
       issues.push({ path: `values.${name}`, message: `must be a valid ${column.kind} value` });

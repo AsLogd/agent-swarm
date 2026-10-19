@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { unlink } from "node:fs/promises";
 import {
   createServer as createHttpServer,
@@ -6,10 +6,17 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { MAX_JSON_COLUMN_BYTES, type ModelDef, parseAppDefinition } from "../apps/definition";
+import {
+  DEFAULT_JSON_COLUMN_MAX_BYTES,
+  jsonColumnMaxBytes,
+  jsonColumnSizeLabel,
+  type ModelDef,
+  parseAppDefinition,
+} from "../apps/definition";
 import { AppRowValidationError, createAppRow, getAppRow, patchAppRow } from "../apps/row-store";
 import { createApp, getApp } from "../apps/store";
 import { closeDb, initDb } from "../be/db";
+import { APPS_JSON_COLUMN_MAX_BYTES_BOUNDS, validateConfigValue } from "../be/swarm-config-guard";
 import { handleApps } from "../http/apps";
 import { getPathSegments, parseQueryParams } from "../http/utils";
 import { listenOnFreePort } from "./test-net";
@@ -93,7 +100,7 @@ const NOTE_COLUMNS = {
 
 /**
  * `{"s":"<ascii>"}` serializes to (body length + 8) bytes, so the boundary can
- * be pinned to the byte: `jsonOfSerializedBytes(MAX_JSON_COLUMN_BYTES)` is the
+ * be pinned to the byte: `jsonOfSerializedBytes(DEFAULT_JSON_COLUMN_MAX_BYTES)` is the
  * largest value a json column accepts.
  */
 function jsonOfSerializedBytes(bytes: number): { s: string } {
@@ -137,8 +144,8 @@ describe("json column kind — definition schema", () => {
   });
 
   test("json default: exactly 256KB serialized passes, one byte more fails", async () => {
-    const exact = jsonOfSerializedBytes(MAX_JSON_COLUMN_BYTES);
-    expect(Buffer.byteLength(JSON.stringify(exact), "utf8")).toBe(MAX_JSON_COLUMN_BYTES);
+    const exact = jsonOfSerializedBytes(DEFAULT_JSON_COLUMN_MAX_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(exact), "utf8")).toBe(DEFAULT_JSON_COLUMN_MAX_BYTES);
     const accepted = await parseAppDefinition(
       defWith({ note: { columns: { payload: { kind: "json", default: exact } } } }),
       { writerIsUser: true },
@@ -149,7 +156,10 @@ describe("json column kind — definition schema", () => {
       defWith({
         note: {
           columns: {
-            payload: { kind: "json", default: jsonOfSerializedBytes(MAX_JSON_COLUMN_BYTES + 1) },
+            payload: {
+              kind: "json",
+              default: jsonOfSerializedBytes(DEFAULT_JSON_COLUMN_MAX_BYTES + 1),
+            },
           },
         },
       }),
@@ -301,7 +311,7 @@ describe("json column kind — row mutations", () => {
     expect((await getAppRow(appId, "note", created.id))?.payload).toBeUndefined();
     const error = await expectRowValidationError(
       patchAppRow(appId, "note", model, created.id, {
-        payload: jsonOfSerializedBytes(MAX_JSON_COLUMN_BYTES + 1),
+        payload: jsonOfSerializedBytes(DEFAULT_JSON_COLUMN_MAX_BYTES + 1),
       }),
     );
     expect(error.issues).toContainEqual({
@@ -325,14 +335,14 @@ describe("json column kind — row mutations", () => {
 
   test("row value: exactly 256KB serialized passes, one byte more fails", async () => {
     const { appId, model } = await createNoteApp();
-    const exact = jsonOfSerializedBytes(MAX_JSON_COLUMN_BYTES);
+    const exact = jsonOfSerializedBytes(DEFAULT_JSON_COLUMN_MAX_BYTES);
     const created = await createAppRow(appId, "note", model, { title: "n1", payload: exact });
     expect((await getAppRow(appId, "note", created.id))?.payload).toEqual(exact);
 
     const error = await expectRowValidationError(
       createAppRow(appId, "note", model, {
         title: "n1",
-        payload: jsonOfSerializedBytes(MAX_JSON_COLUMN_BYTES + 1),
+        payload: jsonOfSerializedBytes(DEFAULT_JSON_COLUMN_MAX_BYTES + 1),
       }),
     );
     expect(error.issues).toContainEqual({
@@ -344,10 +354,10 @@ describe("json column kind — row mutations", () => {
   test("the cap counts UTF-8 bytes, not characters", async () => {
     const { appId, model } = await createNoteApp();
     // "é" is one character but two UTF-8 bytes: fewer characters than the cap, more bytes.
-    const payload = { s: "é".repeat(MAX_JSON_COLUMN_BYTES / 2 - 3) };
+    const payload = { s: "é".repeat(DEFAULT_JSON_COLUMN_MAX_BYTES / 2 - 3) };
     const serialized = JSON.stringify(payload);
-    expect(serialized.length).toBeLessThan(MAX_JSON_COLUMN_BYTES);
-    expect(Buffer.byteLength(serialized, "utf8")).toBe(MAX_JSON_COLUMN_BYTES + 2);
+    expect(serialized.length).toBeLessThan(DEFAULT_JSON_COLUMN_MAX_BYTES);
+    expect(Buffer.byteLength(serialized, "utf8")).toBe(DEFAULT_JSON_COLUMN_MAX_BYTES + 2);
     const error = await expectRowValidationError(
       createAppRow(appId, "note", model, { title: "n1", payload }),
     );
@@ -462,5 +472,73 @@ describe("json column kind — REST runtime", () => {
     });
     expect(applied).toMatchObject({ status: 200, body: { migration: { backfilled: 1 } } });
     expect((await getAppRow(appId, "note", row.id))?.meta).toEqual(meta);
+  });
+});
+
+describe("json column kind — configurable size limit", () => {
+  const original = process.env.APPS_JSON_COLUMN_MAX_BYTES;
+  afterEach(() => {
+    if (original === undefined) delete process.env.APPS_JSON_COLUMN_MAX_BYTES;
+    else process.env.APPS_JSON_COLUMN_MAX_BYTES = original;
+  });
+
+  test("the default cap is 256KB and labels its messages as such", () => {
+    expect(DEFAULT_JSON_COLUMN_MAX_BYTES).toBe(256 * 1024);
+    expect(jsonColumnMaxBytes()).toBe(DEFAULT_JSON_COLUMN_MAX_BYTES);
+    expect(jsonColumnSizeLabel(DEFAULT_JSON_COLUMN_MAX_BYTES)).toBe("256KB");
+    expect(jsonColumnSizeLabel(1500)).toBe("1500 bytes");
+  });
+
+  test("APPS_JSON_COLUMN_MAX_BYTES is read at call time and relabels the limit", async () => {
+    const { appId, model } = await createNoteApp();
+    process.env.APPS_JSON_COLUMN_MAX_BYTES = "2048";
+    expect(jsonColumnMaxBytes()).toBe(2048);
+
+    const error = await expectRowValidationError(
+      createAppRow(appId, "note", model, {
+        title: "big",
+        payload: jsonOfSerializedBytes(3 * 1024),
+      }),
+    );
+    expect(error.issues).toContainEqual({
+      path: "values.payload",
+      message: "json value exceeds the 2KB size limit",
+    });
+    const small = jsonOfSerializedBytes(1024);
+    const row = await createAppRow(appId, "note", model, { title: "small", payload: small });
+    expect((await getAppRow(appId, "note", row.id))?.payload).toEqual(small);
+
+    await expectDefinitionIssue(
+      defWith({
+        note: { columns: { payload: { kind: "json", default: jsonOfSerializedBytes(3 * 1024) } } },
+      }),
+      {
+        path: "models.note.columns.payload.default",
+        message: "json column default exceeds the 2KB size limit",
+      },
+    );
+  });
+
+  test("a malformed or out-of-range override falls back to the default", () => {
+    const { min, max } = APPS_JSON_COLUMN_MAX_BYTES_BOUNDS;
+    for (const raw of ["", "abc", "2048.5", "-2048", String(min - 1), String(max + 1)]) {
+      process.env.APPS_JSON_COLUMN_MAX_BYTES = raw;
+      expect(jsonColumnMaxBytes()).toBe(DEFAULT_JSON_COLUMN_MAX_BYTES);
+    }
+    for (const raw of [String(min), String(max)]) {
+      process.env.APPS_JSON_COLUMN_MAX_BYTES = raw;
+      expect(jsonColumnMaxBytes()).toBe(Number(raw));
+    }
+  });
+
+  test("the config API rejects what the reader would fall back from", () => {
+    const { min, max } = APPS_JSON_COLUMN_MAX_BYTES_BOUNDS;
+    const key = "APPS_JSON_COLUMN_MAX_BYTES";
+    expect(validateConfigValue(key, String(min))).toBeNull();
+    expect(validateConfigValue(key, String(max))).toBeNull();
+    expect(validateConfigValue(key, String(min - 1))).toContain(`between ${min} and ${max}`);
+    expect(validateConfigValue(key, String(max + 1))).toContain(`between ${min} and ${max}`);
+    expect(validateConfigValue(key, "abc")).toContain("integer");
+    expect(validateConfigValue(key, "1.5")).toContain("integer");
   });
 });
