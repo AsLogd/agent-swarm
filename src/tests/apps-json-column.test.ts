@@ -17,7 +17,7 @@ import { AppRowValidationError, createAppRow, getAppRow, patchAppRow } from "../
 import { createApp, getApp } from "../apps/store";
 import { closeDb, initDb } from "../be/db";
 import { APPS_JSON_COLUMN_MAX_BYTES_BOUNDS, validateConfigValue } from "../be/swarm-config-guard";
-import { handleApps } from "../http/apps";
+import { handleApps, selectAppRows } from "../http/apps";
 import { getPathSegments, parseQueryParams } from "../http/utils";
 import { listenOnFreePort } from "./test-net";
 
@@ -376,6 +376,25 @@ describe("json column kind — row mutations", () => {
       path: "values.payload",
       message: "required column is missing",
     });
+  });
+});
+
+describe("json column kind — shared row selector", () => {
+  // The REST route and the MCP tools each reject json filters before reaching
+  // the selector; this is the backstop for any caller that skips its own guard.
+  test("selectAppRows rejects a filter on a json column", async () => {
+    const { appId, model } = await createNoteApp();
+    await createAppRow(appId, "note", model, { title: "scalar", payload: "x" });
+
+    const error = await expectRowValidationError(
+      selectAppRows(appId, "note", model, [{ column: "payload", value: "x" }]),
+    );
+    expect(error.issues).toEqual([
+      { path: "filter.payload", message: "json columns cannot be filtered" },
+    ]);
+
+    const unfiltered = await selectAppRows(appId, "note", model, []);
+    expect(unfiltered.rows.map((row) => row.payload)).toEqual(["x"]);
   });
 });
 

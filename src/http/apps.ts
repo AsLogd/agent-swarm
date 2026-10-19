@@ -1018,6 +1018,15 @@ export async function selectAppRows(
   limit = 200,
   systemColumns = false,
 ) {
+  // Backstop for every caller: the REST route (`filter.<col>`) and the MCP
+  // tools (`equals.<col>`) reject json filters with their own paths first.
+  const jsonFilterIssues = filters.flatMap((filter) =>
+    Object.hasOwn(model.columns, filter.column) && model.columns[filter.column]!.kind === "json"
+      ? [{ path: `filter.${filter.column}`, message: "json columns cannot be filtered" }]
+      : [],
+  );
+  if (jsonFilterIssues.length > 0) throw new AppRowValidationError(jsonFilterIssues);
+
   // SQL narrows the scan; the `===` re-check keeps the exact filter semantics.
   const rows = (
     await listAppRows(
