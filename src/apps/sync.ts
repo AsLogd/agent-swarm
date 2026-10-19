@@ -520,9 +520,20 @@ function projectRecord(args: {
   return values;
 }
 
-/** A missing column and an explicit null are the same absence of a value. */
-function sameValue(existing: unknown, projected: unknown): boolean {
-  return Object.is(existing ?? null, projected ?? null);
+/**
+ * A missing column and an explicit null are the same absence of a value. A
+ * json column compares structurally — the value decoded from storage is never
+ * the same object as a fresh projection — every other kind by identity.
+ */
+function sameValue(
+  column: ModelDef["columns"][string] | undefined,
+  existing: unknown,
+  projected: unknown,
+): boolean {
+  const before = existing ?? null;
+  const after = projected ?? null;
+  if (column?.kind === "json") return Bun.deepEquals(before, after);
+  return Object.is(before, after);
 }
 
 // ---------------------------------------------------------------------------
@@ -691,7 +702,7 @@ function reconcile(args: {
         return;
       }
       const differs = Object.entries(values).some(
-        ([name, value]) => !sameValue(existing[name], value),
+        ([name, value]) => !sameValue(modelDef.columns[name], existing[name], value),
       );
       const updated = await patchAppRowUnlocked(appId, model, modelDef, existing.id, values, {
         allowSourceManaged: true,

@@ -407,6 +407,44 @@ describe("json column kind — REST runtime", () => {
     });
   });
 
+  // Bodies are sent as raw text: `JSON.parse("1e400")` is `Infinity`, which
+  // `JSON.stringify` would otherwise persist as `null`, even on a required column.
+  test("a row value with a non-finite number is rejected, top-level and nested", async () => {
+    const appId = await createNoteAppViaApi();
+    for (const body of [
+      '{"values":{"title":"top","payload":1e400}}',
+      '{"values":{"title":"nested","payload":{"n":[1,{"deep":-1e400}]}}}',
+    ]) {
+      const result = await request<{ error: string; issues: unknown[] }>(
+        `/api/apps/${appId}/models/note/rows`,
+        { method: "POST", body },
+      );
+      expect(result.status).toBe(400);
+      expect(result.body.issues).toContainEqual({
+        path: "values.payload",
+        message: "json value contains a non-finite number",
+      });
+    }
+    const listed = await request<{ rows: unknown[] }>(`/api/apps/${appId}/models/note/rows`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.rows).toEqual([]);
+  });
+
+  test("a json default with a non-finite number is rejected", async () => {
+    const definition = JSON.stringify(
+      defWith({ note: { columns: { payload: { kind: "json", default: { n: "__NF__" } } } } }),
+    ).replace('"__NF__"', "1e400");
+    const result = await request<{ error: string; issues: unknown[] }>("/api/apps", {
+      method: "POST",
+      body: `{"name":"Json defaults","definition":${definition}}`,
+    });
+    expect(result.status).toBe(400);
+    expect(result.body.issues).toContainEqual({
+      path: "models.note.columns.payload.default",
+      message: "json column default contains a non-finite number",
+    });
+  });
+
   test("migration.<col>.set backfills an object into a new json column", async () => {
     const appId = await createNoteAppViaApi();
     const app = await getApp(appId);

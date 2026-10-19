@@ -785,7 +785,6 @@ async function resolveModel(
 }
 
 function parseFilterValue(raw: string, column: ModelDef["columns"][string]): unknown {
-  // Mirrors the definition-time rule: a raw query string can never equal a stored JSON value.
   if (column.kind === "json") throw new Error("json columns cannot be filtered");
   if (column.kind === "number") {
     if (!DECIMAL_NUMBER_PATTERN.test(raw)) throw new Error("must be a decimal number");

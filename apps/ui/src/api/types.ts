@@ -3580,13 +3580,14 @@ export interface SwarmMetrics {
 
 export type AppColumnKind = "string" | "number" | "boolean" | "date" | "enum" | "json";
 
+export type JsonDef = Record<string, unknown> | unknown[];
+
 export interface AppColumnDef {
   kind: AppColumnKind;
   required?: boolean;
   enum?: string[];
   index?: boolean;
-  /** Scalar for scalar kinds; an object or array only on a `json` column. */
-  default?: string | number | boolean | Record<string, unknown> | unknown[];
+  default?: string | number | boolean | JsonDef;
 }
 
 export interface AppModelDef {

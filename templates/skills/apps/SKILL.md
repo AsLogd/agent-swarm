@@ -322,7 +322,7 @@ A named query is:
 }
 ```
 
-`filter` is a strict AND of equality checks. A filter may target a declared model column (never a `json` column) or a system column (`id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`, and on synced models `source`, `syncedAt`, `stale`) — filtering on `id` is the universal way to select one row for a detail view, and `{ "stale": true }` selects rows a complete pull stopped confirming. A literal value must match the column's kind; date filters compare the stored raw ISO string, not parsed instants. Omit `limit` for the default 200 rows, or set an integer from 1 through 1000. `sort.column` is a non-`json` model column, `createdAt`, `updatedAt`, or `syncedAt`; `dir` is `asc` or `desc`. Query runtime state is `{ data, loading, error }` under `/queries/<queryName>`.
+`filter` is a strict AND of equality checks. A filter may target a declared model column or a system column (`id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`, and on synced models `source`, `syncedAt`, `stale`) — filtering on `id` is the universal way to select one row for a detail view, and `{ "stale": true }` selects rows a complete pull stopped confirming. A literal value must match the column's kind; date filters compare the stored raw ISO string, not parsed instants. Omit `limit` for the default 200 rows, or set an integer from 1 through 1000. `sort.column` is a non-`json` model column, `createdAt`, `updatedAt`, or `syncedAt`; `dir` is `asc` or `desc`. Query runtime state is `{ data, loading, error }` under `/queries/<queryName>`.
 
 A filter value may instead be exactly `{ "$param": "<name>" }`. At execution, the caller supplies that name and the server coerces its value to the filtered column's kind before equality matching:
 

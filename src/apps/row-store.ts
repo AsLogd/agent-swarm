@@ -188,6 +188,8 @@ function prepareValues(
       const issue = jsonColumnValueIssue(value);
       if (issue === "unserializable") {
         issues.push({ path: `values.${name}`, message: "must be a valid json value" });
+      } else if (issue === "non-finite") {
+        issues.push({ path: `values.${name}`, message: "json value contains a non-finite number" });
       } else if (issue === "oversized") {
         issues.push({ path: `values.${name}`, message: "json value exceeds the 256KB size limit" });
       }

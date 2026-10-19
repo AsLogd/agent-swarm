@@ -33,28 +33,31 @@ export function isIso8601Date(value: string): boolean {
 /** Serialized-size cap for json column values AND defaults. */
 export const MAX_JSON_COLUMN_BYTES = 256 * 1024;
 
-/** Serialized UTF-8 byte size, or null when the value is not JSON-serializable. */
-export function serializedJsonSize(value: unknown): number | null {
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? null : Buffer.byteLength(serialized, "utf8");
-  } catch {
-    return null; // circular reference / BigInt / throwing toJSON
-  }
-}
-
-export type JsonColumnValueIssue = "unserializable" | "oversized";
+export type JsonColumnValueIssue = "unserializable" | "non-finite" | "oversized";
 
 /**
- * Why a value cannot live in a json column — not JSON-serializable, or over
- * `MAX_JSON_COLUMN_BYTES` once serialized — or `null` when it fits. The single
- * implementation of the size cap; it serializes exactly once, and each caller
- * maps the reason to its own message.
+ * Why a value cannot live in a json column — not JSON-serializable, carrying a
+ * non-finite number anywhere inside it, or over `MAX_JSON_COLUMN_BYTES` once
+ * serialized — or `null` when it fits. The single implementation of the cap:
+ * it serializes exactly once, flagging non-finite numbers on that same walk
+ * (a lenient parser turns `1e400` into `Infinity`, which `JSON.stringify`
+ * would quietly store as `null`), and each caller maps the reason to its own
+ * message.
  */
 export function jsonColumnValueIssue(value: unknown): JsonColumnValueIssue | null {
-  const size = serializedJsonSize(value);
-  if (size === null) return "unserializable";
-  return size > MAX_JSON_COLUMN_BYTES ? "oversized" : null;
+  let nonFinite = false;
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value, (_key, entry: unknown) => {
+      if (typeof entry === "number" && !Number.isFinite(entry)) nonFinite = true;
+      return entry;
+    });
+  } catch {
+    return "unserializable"; // circular reference / BigInt / throwing toJSON
+  }
+  if (serialized === undefined) return "unserializable";
+  if (nonFinite) return "non-finite";
+  return Buffer.byteLength(serialized, "utf8") > MAX_JSON_COLUMN_BYTES ? "oversized" : null;
 }
 
 /**
@@ -141,6 +144,12 @@ const ColumnDefSchema = z
           code: "custom",
           path: ["default"],
           message: "json column default must be JSON-serializable",
+        });
+      } else if (issue === "non-finite") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["default"],
+          message: "json column default contains a non-finite number",
         });
       } else if (issue === "oversized") {
         // An oversized default would pass here only to fail every row create.
