@@ -538,6 +538,54 @@ describe("json column kind — configurable size limit", () => {
     );
   });
 
+  // The cap is an upsert-time constraint: lowering it must not turn an app
+  // saved under the higher cap into one that "needs repair" on every read.
+  test("lowering the cap keeps an app saved under the higher cap readable", async () => {
+    process.env.APPS_JSON_COLUMN_MAX_BYTES = "4096";
+    const definition = defWith({
+      note: {
+        columns: {
+          title: { kind: "string", required: true },
+          payload: { kind: "json", required: true, default: jsonOfSerializedBytes(2048) },
+        },
+      },
+    });
+    const created = await request<{ app: { id: string } }>("/api/apps", {
+      method: "POST",
+      body: JSON.stringify({ name: "Json cap", definition }),
+    });
+    expect(created.status).toBe(201);
+    const appId = created.body.app.id;
+    const stored = { s: "y".repeat(2048 - 8) };
+    const createdRow = await request<{ row: { id: string } }>(
+      `/api/apps/${appId}/models/note/rows`,
+      { method: "POST", body: JSON.stringify({ values: { title: "big", payload: stored } }) },
+    );
+    expect(createdRow.status).toBe(201);
+
+    process.env.APPS_JSON_COLUMN_MAX_BYTES = "1024";
+    const app = await request<{ app: { definitionError?: unknown } }>(`/api/apps/${appId}`);
+    expect(app.status).toBe(200);
+    expect(app.body.app.definitionError).toBeUndefined();
+    const rows = await request<{ rows: Array<{ payload: unknown }> }>(
+      `/api/apps/${appId}/models/note/rows`,
+    );
+    expect(rows.status).toBe(200);
+    expect(rows.body.rows.map((row) => row.payload)).toEqual([stored]);
+    expect((await getAppRow(appId, "note", createdRow.body.row.id))?.payload).toEqual(stored);
+
+    // Writing the same definition again under the lower cap is still refused.
+    const rewritten = await request<{ error: string; issues: unknown[] }>(`/api/apps/${appId}`, {
+      method: "PUT",
+      body: JSON.stringify({ definition }),
+    });
+    expect(rewritten.status).toBe(400);
+    expect(rewritten.body.issues).toContainEqual({
+      path: "models.note.columns.payload.default",
+      message: "json column default exceeds the 1KB size limit",
+    });
+  });
+
   test("a malformed or out-of-range override falls back to the default", () => {
     const { min, max } = APPS_JSON_COLUMN_MAX_BYTES_BOUNDS;
     for (const raw of ["", "abc", "2048.5", "-2048", String(min - 1), String(max + 1)]) {

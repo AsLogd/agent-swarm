@@ -162,6 +162,7 @@ const ColumnDefSchema = z
 
     if (column.default === undefined) return;
     if (column.kind === "json") {
+      // Structural checks only; the size cap is write-time (`jsonColumnDefaultSizeIssues`).
       const issue = jsonColumnValueIssue(column.default);
       if (issue === "unserializable") {
         ctx.addIssue({
@@ -174,13 +175,6 @@ const ColumnDefSchema = z
           code: "custom",
           path: ["default"],
           message: "json column default contains a non-finite number",
-        });
-      } else if (issue === "oversized") {
-        // An oversized default would pass here only to fail every row create.
-        ctx.addIssue({
-          code: "custom",
-          path: ["default"],
-          message: `json column default exceeds the ${jsonColumnSizeLabel()} size limit`,
         });
       }
       return;
@@ -964,6 +958,31 @@ function syncActionIssues(
   return [{ path: `actions.${name}`, message: "no model declares a source to sync" }];
 }
 
+/**
+ * The serialized-size cap on json column defaults, applied on definition
+ * WRITES only. It lives outside `AppDefinitionSchema` on purpose: the schema
+ * also decodes persisted definitions (`decodeAppDefinition`, the row store's
+ * model lookup), and a cap lowered after an app was saved must not turn that
+ * app into one that "needs repair" on every read. Writing the definition
+ * again re-applies the current cap. An oversized default would otherwise be
+ * accepted only to fail every row create that relies on it.
+ */
+function jsonColumnDefaultSizeIssues(definition: AppDefinition): AppValidationIssue[] {
+  const issues: AppValidationIssue[] = [];
+  for (const [modelName, model] of Object.entries(definition.models)) {
+    for (const [columnName, column] of Object.entries(model.columns)) {
+      if (column.kind !== "json" || column.default === undefined) continue;
+      if (jsonColumnValueIssue(column.default) === "oversized") {
+        issues.push({
+          path: `models.${modelName}.columns.${columnName}.default`,
+          message: `json column default exceeds the ${jsonColumnSizeLabel()} size limit`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
 export async function parseAppDefinition(
   input: unknown,
   elementContext: AppDefinitionParseContext = {},
@@ -999,6 +1018,7 @@ export async function parseAppDefinition(
   if (!parsed.success) return { success: false, issues: appDefinitionIssues(parsed.error) };
 
   const issues = [
+    ...jsonColumnDefaultSizeIssues(parsed.data),
     ...Object.keys(parsed.data.pages).flatMap((pageName) =>
       validatePage(parsed.data, catalog, pageName),
     ),
