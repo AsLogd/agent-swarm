@@ -9751,6 +9751,10 @@
                   "input": {
                     "type": "object",
                     "additionalProperties": {}
+                  },
+                  "parentTaskId": {
+                    "type": "string",
+                    "minLength": 1
                   }
                 }
               }
@@ -9938,7 +9942,7 @@
             }
           },
           "400": {
-            "description": "Invalid action input or stale script reference",
+            "description": "Invalid action input, stale script reference, or parentTaskId on a non-task action",
             "content": {
               "application/json": {
                 "schema": {
@@ -9958,7 +9962,7 @@
             }
           },
           "404": {
-            "description": "App or action not found",
+            "description": "App, action, or parent task not found",
             "content": {
               "application/json": {
                 "schema": {
