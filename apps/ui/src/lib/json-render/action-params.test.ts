@@ -13,14 +13,47 @@ describe("$chain sentinel", () => {
     expect(resolveScopedValue({ $chain: "" }, { chain })).toEqual(chain);
   });
 
-  test("returns undefined when scope.chain is not set", () => {
-    expect(resolveScopedValue({ $chain: "leafTaskId" }, {})).toBeUndefined();
+  test("keeps the sentinel when scope.chain is not set", () => {
+    expect(resolveScopedValue({ $chain: "leafTaskId" }, {})).toEqual({ $chain: "leafTaskId" });
+    expect(resolveScopedValue({ $chain: "" }, {})).toEqual({ $chain: "" });
   });
 
-  test("returns undefined for a key missing on scope.chain", () => {
+  test("keeps the sentinel for a key missing on scope.chain", () => {
     expect(
       resolveScopedValue({ $chain: "newTaskId" }, { chain: { leafTaskId: "task-1" } }),
-    ).toBeUndefined();
+    ).toEqual({ $chain: "newTaskId" });
+  });
+
+  test("Table dispatch resolves $row but leaves an unbound parentTaskId visible", () => {
+    const params = resolveScopedParams(
+      { name: "ask", input: { $row: "" }, parentTaskId: { $chain: "leafTaskId" } },
+      { row: { id: "r1" }, rowIndex: 0 },
+    );
+    expect(params).toEqual({
+      name: "ask",
+      input: { id: "r1" },
+      parentTaskId: { $chain: "leafTaskId" },
+    });
+  });
+
+  test("Form dispatch resolves $form but leaves an unbound parentTaskId visible", () => {
+    const params = resolveScopedParams(
+      { name: "ask", input: { $form: "" }, parentTaskId: { $chain: "leafTaskId" } },
+      { form: { title: "hello" } },
+    );
+    expect(params).toEqual({
+      name: "ask",
+      input: { title: "hello" },
+      parentTaskId: { $chain: "leafTaskId" },
+    });
+  });
+
+  test("a dispatch scope that carries chain resolves parentTaskId to the leaf", () => {
+    const params = resolveScopedParams(
+      { name: "ask", input: { $row: "" }, parentTaskId: { $chain: "leafTaskId" } },
+      { row: { id: "r1" }, chain: { leafTaskId: "task-1" } },
+    );
+    expect(params).toEqual({ name: "ask", input: { id: "r1" }, parentTaskId: "task-1" });
   });
 
   test("resolves nested inside action params alongside other literals", () => {

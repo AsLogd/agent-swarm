@@ -645,7 +645,7 @@ Only inside action-chain `params` (`on.<event>`, `Table.rowActions[].actions`, o
 | `{ "$form": "title" }` | One current Form value. |
 | `{ "$form": "" }` | All current Form values. |
 | `{ "$state": "/queries/allIdeas/data" }` | Current value at a valid app state path, including action state such as `/actions/refreshIssues/status`. |
-| `{ "$chain": "leafTaskId" }` | One chain-scope value, published by a component that runs a task chain; it carries `leafTaskId` and `newTaskId`. |
+| `{ "$chain": "leafTaskId" }` | One chain-scope value, published by a component that runs a task chain; it carries `leafTaskId` and `newTaskId`. Where no chain scope is published, the sentinel is left in place and the action fails instead of silently dropping the parent. |
 | `{ "$chain": "" }` | The whole chain scope. |
 
 Each sentinel object must contain exactly the single key shown.

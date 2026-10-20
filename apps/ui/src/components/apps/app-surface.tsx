@@ -972,10 +972,12 @@ export function AppSurface({
               ? `/actions/${name}`
               : `/refs/${targetAppId}/actions/${name}`;
           // A `$chain` binding only resolves inside a component that publishes
-          // chain scope; anywhere else json-render hands the sentinel object
-          // through. An empty string (a `$state` read of nothing) is as unresolved:
-          // `invokeAppAction` drops a falsy id, which would silently create a
-          // parentless task. Fail here with a clear message instead.
+          // chain scope. Elsewhere the sentinel object arrives intact: json-render
+          // hands it through, and `resolveScopedValue` keeps an unresolved `$chain`
+          // on purpose, which is what makes Table/Form dispatch land here instead
+          // of silently dropping the parent. An empty string (a `$state` read of
+          // nothing) is as unresolved: `invokeAppAction` drops a falsy id, which
+          // would create a parentless task. Fail here with a clear message instead.
           const parentTaskId: unknown = params?.parentTaskId;
           if (
             parentTaskId !== undefined &&
