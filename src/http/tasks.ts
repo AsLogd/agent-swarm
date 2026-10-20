@@ -87,7 +87,7 @@ import { buildTaskRequestedBy, TaskRequestedBySchema } from "./requested-by";
 import { bodyTask, route } from "./route-def";
 import {
   canReadSession,
-  hasSessionWrite,
+  denyParentAttach,
   readableByFor,
   resolveSessionActor,
   SESSION_READ_DENIED,
@@ -1060,29 +1060,10 @@ export async function handleTasks(
       ? await getTaskById(parsed.body.parentTaskId)
       : null;
     // The child inherits the parent's thread context, so an agent caller must own or
-    // have created the parent. Operator and user callers keep their access.
+    // have created the parent, and a follow-up in someone else's session needs a
+    // write share. The same gate guards app actions that chain under a task.
     const principal = await resolveTaskWritePrincipal(req, myAgentId);
-    if (
-      parentTask &&
-      !can({
-        principal,
-        verb: "task.parent.attach",
-        resource: {
-          kind: "task",
-          taskId: parentTask.id,
-          requestedByUserId: parentTask.requestedByUserId,
-          creatorAgentId: parentTask.creatorAgentId,
-          agentId: parentTask.agentId,
-        },
-        source: "http",
-      }).allow
-    ) {
-      jsonError(res, `You don't have context for parent task ${parentTask.id}.`, 403);
-      return true;
-    }
-    // A follow-up in someone else's session needs a write share.
-    if (parentTask && !(await hasSessionWrite(req, myAgentId, parentTask.id))) {
-      jsonError(res, SESSION_WRITE_DENIED, 403);
+    if (parentTask && (await denyParentAttach(req, res, myAgentId, parentTask, principal))) {
       return true;
     }
     // A chat-sdk contextKey binds the task to a chat thread that its assignee and creator

@@ -2007,7 +2007,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Invalid action input or stale script reference */
+                /** @description Invalid action input, stale script reference, or parentTaskId on a non-task action */
                 400: {
                     headers: {
                         [name: string]: unknown;

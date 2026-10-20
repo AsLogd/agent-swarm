@@ -31,7 +31,7 @@ export async function runAppAction({
   app: AppRecord;
   name: string;
   input?: Record<string, unknown>;
-  /** Task-kind actions only: chains the created task under an existing one. Ignored by script and sync actions. */
+  /** Task-kind actions only: chains the created task under an existing one. The HTTP route rejects it (400) for script and sync actions, which never read it. */
   parentTaskId?: string;
   caller: AppActionCaller;
   actor: string;

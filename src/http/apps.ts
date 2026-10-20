@@ -71,7 +71,7 @@ import { scrubObject } from "../utils/secret-scrubber";
 import { resolveHttpFavoriteOwner } from "./favorite-owner";
 import { agentFirstPrincipal } from "./request-principal";
 import { route } from "./route-def";
-import { hasSessionWrite, SESSION_WRITE_DENIED } from "./session-access";
+import { denyParentAttach } from "./session-access";
 import { BODY_TOO_LARGE, enforceContentLengthCap, json, jsonError } from "./utils";
 
 const MAX_APP_BODY_BYTES = 5 * 1024 * 1024;
@@ -626,12 +626,15 @@ const runActionRoute = route({
   params: z.object({ id: z.string().min(1), name: AppNameSchema }),
   body: z.object({
     input: z.record(z.string(), z.unknown()).optional(),
-    /** Forwarded to task creation for `kind: "task"` actions only — chains the new task off an existing one. */
-    parentTaskId: z.string().optional(),
+    /** Chains the new task off an existing one. Task-kind actions only: a script or sync action rejects it (400). */
+    parentTaskId: z.string().min(1).optional(),
   }),
   responses: {
     200: { description: "Action invoked", schema: runActionResultSchema },
-    400: { description: "Invalid action input or stale script reference" },
+    400: {
+      description:
+        "Invalid action input, stale script reference, or parentTaskId on a non-task action",
+    },
     403: { description: "Permission denied" },
     409: { description: "App definition needs repair" },
     404: { description: "App, action, or parent task not found" },
@@ -1388,37 +1391,29 @@ export async function handleApps(
       return true;
     }
     if (definitionNeedsRepair(res, app)) return true;
-    // Twin of the parent gate in POST /api/tasks (src/http/tasks.ts): the child
-    // inherits the parent's thread context, so an agent caller must own or have
-    // created the parent and a user caller needs a write share on its session.
-    // Without it an app action would chain under any task past `task.parent.attach`.
     if (parsed.body.parentTaskId) {
-      const parentTask = await getTaskById(parsed.body.parentTaskId);
-      if (!parentTask) {
-        jsonError(res, "parent task not found", 404);
+      // `parentTaskId` only means something to a task-kind action: a script or
+      // sync action rejects it rather than silently dropping it. An unknown
+      // action keeps `runAppAction`'s 404.
+      const actions = app.definition.actions;
+      const action =
+        actions && Object.hasOwn(actions, parsed.params.name)
+          ? actions[parsed.params.name]
+          : undefined;
+      if (action && action.kind !== "task") {
+        jsonError(res, "parentTaskId is only supported for task-kind actions", 400);
         return true;
       }
-      const principal = await agentFirstPrincipal(req, myAgentId);
-      if (
-        !can({
-          principal,
-          verb: "task.parent.attach",
-          resource: {
-            kind: "task",
-            taskId: parentTask.id,
-            requestedByUserId: parentTask.requestedByUserId,
-            creatorAgentId: parentTask.creatorAgentId,
-            agentId: parentTask.agentId,
-          },
-          source: "http",
-        }).allow
-      ) {
-        jsonError(res, `You don't have context for parent task ${parentTask.id}.`, 403);
-        return true;
-      }
-      if (!(await hasSessionWrite(req, myAgentId, parentTask.id))) {
-        jsonError(res, SESSION_WRITE_DENIED, 403);
-        return true;
+      if (action) {
+        const parentTask = await getTaskById(parsed.body.parentTaskId);
+        if (!parentTask) {
+          jsonError(res, "parent task not found", 404);
+          return true;
+        }
+        // The same gate as POST /api/tasks: without it an app action would
+        // chain under any task past `task.parent.attach`.
+        const principal = await agentFirstPrincipal(req, myAgentId);
+        if (await denyParentAttach(req, res, myAgentId, parentTask, principal)) return true;
       }
     }
     const output = await runAppAction({
