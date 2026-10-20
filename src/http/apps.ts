@@ -70,7 +70,7 @@ import { getRequestAuth } from "../utils/request-auth-context";
 import { scrubObject } from "../utils/secret-scrubber";
 import { resolveHttpFavoriteOwner } from "./favorite-owner";
 import { agentFirstPrincipal } from "./request-principal";
-import { route } from "./route-def";
+import { bodyTask, route } from "./route-def";
 import { denyParentAttach } from "./session-access";
 import { BODY_TOO_LARGE, enforceContentLengthCap, json, jsonError } from "./utils";
 
@@ -620,6 +620,9 @@ const runActionRoute = route({
   method: "post",
   path: "/api/apps/{id}/actions/{name}",
   pattern: ["api", "apps", null, "actions", null],
+  // A task-kind action may chain under `body.parentTaskId`: a user caller needs
+  // write access to that session, as for POST /api/tasks.
+  session: bodyTask("parentTaskId"),
   summary: "Run a custom app action",
   description: "Runs the saved script, or creates the agent task, named by the app definition.",
   tags: ["Apps"],
