@@ -973,9 +973,14 @@ export function AppSurface({
               : `/refs/${targetAppId}/actions/${name}`;
           // A `$chain` binding only resolves inside a component that publishes
           // chain scope; anywhere else json-render hands the sentinel object
-          // through. Fail here with a clear message instead of the server's 400.
+          // through. An empty string (a `$state` read of nothing) is as unresolved:
+          // `invokeAppAction` drops a falsy id, which would silently create a
+          // parentless task. Fail here with a clear message instead.
           const parentTaskId: unknown = params?.parentTaskId;
-          if (parentTaskId !== undefined && typeof parentTaskId !== "string") {
+          if (
+            parentTaskId !== undefined &&
+            (typeof parentTaskId !== "string" || parentTaskId === "")
+          ) {
             const message =
               "app.action parentTaskId must resolve to a task id; a $chain binding only resolves inside a component that publishes chain scope";
             ctx.store.set(path, { status: "error", error: message } satisfies ActionSlot);

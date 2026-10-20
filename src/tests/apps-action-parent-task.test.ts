@@ -141,6 +141,8 @@ beforeAll(async () => {
       await unlink(`${TEST_DB_PATH}${suffix}`);
     } catch {}
   }
+  // Safe to mutate: CI runs one process per test file (`bun test --parallel=4`)
+  // and afterAll restores the previous value.
   previousApiKey = process.env.AGENT_SWARM_API_KEY;
   process.env.AGENT_SWARM_API_KEY = API_KEY;
   initDb(TEST_DB_PATH);
