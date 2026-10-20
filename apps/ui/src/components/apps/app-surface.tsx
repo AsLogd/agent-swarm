@@ -971,13 +971,24 @@ export function AppSurface({
             targetAppId === ctx.app.id
               ? `/actions/${name}`
               : `/refs/${targetAppId}/actions/${name}`;
+          // A `$chain` binding only resolves inside a component that publishes
+          // chain scope; anywhere else json-render hands the sentinel object
+          // through. Fail here with a clear message instead of the server's 400.
+          const parentTaskId: unknown = params?.parentTaskId;
+          if (parentTaskId !== undefined && typeof parentTaskId !== "string") {
+            const message =
+              "app.action parentTaskId must resolve to a task id; a $chain binding only resolves inside a component that publishes chain scope";
+            ctx.store.set(path, { status: "error", error: message } satisfies ActionSlot);
+            setActionError(message);
+            return;
+          }
           ctx.store.set(path, { status: "running" } satisfies ActionSlot);
           try {
             const response = await api.invokeAppAction(
               targetAppId,
               name,
               params?.input,
-              params?.parentTaskId,
+              parentTaskId,
             );
             setLastResponse(response);
 
