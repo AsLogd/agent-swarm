@@ -25,6 +25,8 @@
  *   - `{ $rowIndex: true }`                 — row index
  *   - `{ $form: "field" }` / `{ $form: "" }`— form field / all collected values
  *   - `{ $state: "/path" }`                 — json-render state read
+ *   - `{ $chain: "key" }` / `{ $chain: "" }`— chain-derived value (e.g. `leafTaskId` /
+ *     `newTaskId` set by a component that runs a task chain) / whole chain object
  * Anything else is a literal.
  */
 
@@ -39,6 +41,8 @@ export interface ParamScope {
   form?: Record<string, unknown>;
   /** Live json-render state snapshot, for `$state` reads. */
   state?: Record<string, unknown>;
+  /** Chain-derived values (current leaf / newly created task id) published by a component that runs a task chain — target of `$chain`. */
+  chain?: { leafTaskId?: string; newTaskId?: string };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -64,6 +68,10 @@ export function resolveScopedValue(value: unknown, scope: ParamScope): unknown {
   }
   if ("$state" in value && typeof value.$state === "string") {
     return getByPath(scope.state ?? {}, value.$state);
+  }
+  if ("$chain" in value && typeof value.$chain === "string") {
+    if (scope.chain === undefined) return undefined;
+    return value.$chain === "" ? scope.chain : getByPath(scope.chain, value.$chain);
   }
 
   const out: Record<string, unknown> = {};
