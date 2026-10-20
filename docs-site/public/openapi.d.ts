@@ -1954,6 +1954,7 @@ export interface paths {
                         input?: {
                             [key: string]: unknown;
                         };
+                        parentTaskId?: string;
                     };
                 };
             };
@@ -2024,7 +2025,7 @@ export interface paths {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description App or action not found */
+                /** @description App, action, or parent task not found */
                 404: {
                     headers: {
                         [name: string]: unknown;

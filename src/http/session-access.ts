@@ -76,6 +76,16 @@ export function readableByFor(actor: SessionActor): { userId: string | null } | 
 export const SESSION_WRITE_DENIED =
   "You can't write in this session. Ask the owner to share it with edit access.";
 
+/** True unless the request acts for a user who lacks write access to the task's session. */
+export async function hasSessionWrite(
+  req: IncomingMessage,
+  myAgentId: string | undefined,
+  taskId: string,
+): Promise<boolean> {
+  const access = await sessionAccessFor(await resolveSessionActor(req, myAgentId), taskId);
+  return hasSessionAccess(access, "write");
+}
+
 /**
  * The denial for an actor lacking `needed` access to the session holding
  * `taskId`, or null. An unknown task passes, so the handler still answers 404.

@@ -87,6 +87,7 @@ import { buildTaskRequestedBy, TaskRequestedBySchema } from "./requested-by";
 import { bodyTask, route } from "./route-def";
 import {
   canReadSession,
+  hasSessionWrite,
   readableByFor,
   resolveSessionActor,
   SESSION_READ_DENIED,
@@ -778,16 +779,6 @@ const updateTaskTitleRoute = route({
     ungated: "mirrors the pre-RBAC PATCH /api/tasks/{id}/vcs sibling route: bearer auth only",
   },
 });
-
-/** True unless the request acts for a user who lacks write access to the task's session. */
-async function hasSessionWrite(
-  req: IncomingMessage,
-  myAgentId: string | undefined,
-  taskId: string,
-): Promise<boolean> {
-  const access = await sessionAccessFor(await resolveSessionActor(req, myAgentId), taskId);
-  return hasSessionAccess(access, "write");
-}
 
 async function canSteerTask(
   req: IncomingMessage,

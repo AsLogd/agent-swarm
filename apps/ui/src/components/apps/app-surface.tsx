@@ -973,7 +973,12 @@ export function AppSurface({
               : `/refs/${targetAppId}/actions/${name}`;
           ctx.store.set(path, { status: "running" } satisfies ActionSlot);
           try {
-            const response = await api.invokeAppAction(targetAppId, name, params?.input);
+            const response = await api.invokeAppAction(
+              targetAppId,
+              name,
+              params?.input,
+              params?.parentTaskId,
+            );
             setLastResponse(response);
 
             if (response.taskId) {

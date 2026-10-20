@@ -24,12 +24,15 @@ export async function runAppAction({
   app,
   name,
   input = {},
+  parentTaskId,
   caller,
   actor,
 }: {
   app: AppRecord;
   name: string;
   input?: Record<string, unknown>;
+  /** Task-kind actions only: chains the created task under an existing one. Ignored by script and sync actions. */
+  parentTaskId?: string;
   caller: AppActionCaller;
   actor: string;
 }) {
@@ -136,6 +139,7 @@ export async function runAppAction({
       // swarm-tasks source can pull them back via config.assetKey.
       key: normalizeAssetKey(`shared/app:${app.id}/action:${name}/`),
       ...(actor.startsWith("user:") ? { requestedByUserId: actor.slice("user:".length) } : {}),
+      ...(parentTaskId ? { parentTaskId } : {}),
     },
     { origin: "app" },
   );

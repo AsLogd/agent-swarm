@@ -9751,6 +9751,9 @@
                   "input": {
                     "type": "object",
                     "additionalProperties": {}
+                  },
+                  "parentTaskId": {
+                    "type": "string"
                   }
                 }
               }
@@ -9958,7 +9961,7 @@
             }
           },
           "404": {
-            "description": "App or action not found",
+            "description": "App, action, or parent task not found",
             "content": {
               "application/json": {
                 "schema": {

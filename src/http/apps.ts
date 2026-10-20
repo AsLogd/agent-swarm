@@ -62,14 +62,16 @@ import {
   rollbackApp,
   snapshotApp,
 } from "../apps/version";
-import { getAgentById, getAppVersion, getAppVersions } from "../be/db";
+import { getAgentById, getAppVersion, getAppVersions, getTaskById } from "../be/db";
 import type { RbacPrincipal, RbacResource } from "../rbac";
 import { can } from "../rbac";
 import { AgentTaskStatusSchema } from "../types";
 import { getRequestAuth } from "../utils/request-auth-context";
 import { scrubObject } from "../utils/secret-scrubber";
 import { resolveHttpFavoriteOwner } from "./favorite-owner";
+import { agentFirstPrincipal } from "./request-principal";
 import { route } from "./route-def";
+import { hasSessionWrite, SESSION_WRITE_DENIED } from "./session-access";
 import { BODY_TOO_LARGE, enforceContentLengthCap, json, jsonError } from "./utils";
 
 const MAX_APP_BODY_BYTES = 5 * 1024 * 1024;
@@ -622,13 +624,17 @@ const runActionRoute = route({
   description: "Runs the saved script, or creates the agent task, named by the app definition.",
   tags: ["Apps"],
   params: z.object({ id: z.string().min(1), name: AppNameSchema }),
-  body: z.object({ input: z.record(z.string(), z.unknown()).optional() }),
+  body: z.object({
+    input: z.record(z.string(), z.unknown()).optional(),
+    /** Forwarded to task creation for `kind: "task"` actions only — chains the new task off an existing one. */
+    parentTaskId: z.string().optional(),
+  }),
   responses: {
     200: { description: "Action invoked", schema: runActionResultSchema },
     400: { description: "Invalid action input or stale script reference" },
     403: { description: "Permission denied" },
     409: { description: "App definition needs repair" },
-    404: { description: "App or action not found" },
+    404: { description: "App, action, or parent task not found" },
   },
   rbac: { permission: "app.use" },
 });
@@ -1382,10 +1388,44 @@ export async function handleApps(
       return true;
     }
     if (definitionNeedsRepair(res, app)) return true;
+    // Twin of the parent gate in POST /api/tasks (src/http/tasks.ts): the child
+    // inherits the parent's thread context, so an agent caller must own or have
+    // created the parent and a user caller needs a write share on its session.
+    // Without it an app action would chain under any task past `task.parent.attach`.
+    if (parsed.body.parentTaskId) {
+      const parentTask = await getTaskById(parsed.body.parentTaskId);
+      if (!parentTask) {
+        jsonError(res, "parent task not found", 404);
+        return true;
+      }
+      const principal = await agentFirstPrincipal(req, myAgentId);
+      if (
+        !can({
+          principal,
+          verb: "task.parent.attach",
+          resource: {
+            kind: "task",
+            taskId: parentTask.id,
+            requestedByUserId: parentTask.requestedByUserId,
+            creatorAgentId: parentTask.creatorAgentId,
+            agentId: parentTask.agentId,
+          },
+          source: "http",
+        }).allow
+      ) {
+        jsonError(res, `You don't have context for parent task ${parentTask.id}.`, 403);
+        return true;
+      }
+      if (!(await hasSessionWrite(req, myAgentId, parentTask.id))) {
+        jsonError(res, SESSION_WRITE_DENIED, 403);
+        return true;
+      }
+    }
     const output = await runAppAction({
       app,
       name: parsed.params.name,
       input: parsed.body.input,
+      parentTaskId: parsed.body.parentTaskId,
       caller,
       actor,
     });
