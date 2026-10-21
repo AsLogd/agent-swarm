@@ -108,7 +108,10 @@ describe("Tree validation", () => {
           root: "root",
           elements: {
             root: { type: "Stack", props: {}, children: ["tree"] },
-            tree: { type: "Tree", props: { nodes: { $state: "/queries/documentById/data/0/doc" } } },
+            tree: {
+              type: "Tree",
+              props: { nodes: { $state: "/queries/documentById/data/0/doc" } },
+            },
           },
         },
       },
