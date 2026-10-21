@@ -43,6 +43,11 @@ export function cardGridFieldKind<K extends string>(
   return typeof value === "object" && value !== null ? "json" : undefined;
 }
 
+/** Card meta text and badge values: capped at `CARD_TITLE_MAX_CHARS` like the title. */
+export function cardGridCapText(text: string): string {
+  return truncateText(text, CARD_TITLE_MAX_CHARS);
+}
+
 /** The first `limit` rows plus how many are still hidden behind "Show more". */
 export function cardGridVisibleRows<T>(
   rows: readonly T[],

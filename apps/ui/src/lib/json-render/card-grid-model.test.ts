@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CARD_GRID_PAGE_SIZE,
   CARD_TITLE_MAX_CHARS,
+  cardGridCapText,
   cardGridFieldKind,
   cardGridRowKey,
   cardGridTitleText,
@@ -109,5 +110,16 @@ describe("cardGridVisibleRows", () => {
       visible: rows.slice(0, 3),
       remaining: 0,
     });
+  });
+});
+
+describe("cardGridCapText", () => {
+  test("short text is unchanged", () => {
+    expect(cardGridCapText("active")).toBe("active");
+  });
+
+  test("long text is cut at CARD_TITLE_MAX_CHARS with an ellipsis", () => {
+    const capped = cardGridCapText("x".repeat(CARD_TITLE_MAX_CHARS + 50));
+    expect(capped).toBe(`${"x".repeat(CARD_TITLE_MAX_CHARS)}…`);
   });
 });

@@ -168,6 +168,7 @@ import { resolveScopedParams } from "./action-params";
 import { applyTemplate } from "./apply-template";
 import {
   CARD_GRID_PAGE_SIZE,
+  cardGridCapText,
   cardGridFieldKind,
   cardGridRowKey,
   cardGridTitleText,
@@ -2747,10 +2748,10 @@ const CARD_GRID_DEFAULT_COLUMNS: GridColumns = { base: 1, sm: 2, md: 3 };
 /** One `CardGrid.fields[]` entry rendered into the `·`-joined meta line, or `null` to skip it (empty value). */
 function cardGridMetaItem(field: CardGridField, value: unknown): ReactNode | null {
   if (field.kind === "badge") {
-    const raw = value === null || value === undefined ? "" : String(value);
+    const raw = value === null || value === undefined ? "" : cardGridCapText(String(value));
     return raw ? <StatusPill text={raw} tone={badgeToneFor(field.tones, raw)} /> : null;
   }
-  const text = formatValue(cardGridFieldKind(field.kind, value), value);
+  const text = cardGridCapText(formatValue(cardGridFieldKind(field.kind, value), value));
   return text || null;
 }
 
@@ -2794,6 +2795,15 @@ function CardGridComponent({ props }: { props: CardGridComponentProps }) {
   // Not reset on data changes: a bound `data` array is rebuilt on every poll,
   // and a reset would collapse the grid under the reader every few seconds.
   const [limit, setLimit] = useState(CARD_GRID_PAGE_SIZE);
+  // "Show more" can unmount itself; move focus to the first new card instead
+  // of letting it fall back to the page body.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
+  useEffect(() => {
+    if (focusIndex === null) return;
+    const card = gridRef.current?.children[focusIndex];
+    if (card instanceof HTMLElement) card.focus();
+  }, [focusIndex]);
   const rows = Array.isArray(props.data) ? (props.data as Row[]) : [];
   const fields = (props.fields ?? []) as CardGridField[];
   const onClick = props.onClick as ActionChain | undefined;
@@ -2843,7 +2853,7 @@ function CardGridComponent({ props }: { props: CardGridComponentProps }) {
 
   return (
     <div className="flex min-w-0 flex-col gap-3" data-testid="json-render-card-grid">
-      <div className={gridClassName}>
+      <div className={gridClassName} ref={gridRef}>
         {visible.map((row, index) => {
           const titleText = cardGridTitleText(row[props.titleKey]);
           const metaItems = fields
@@ -2876,7 +2886,7 @@ function CardGridComponent({ props }: { props: CardGridComponentProps }) {
                   : undefined
               }
               role={clickable ? "button" : undefined}
-              tabIndex={clickable ? 0 : undefined}
+              tabIndex={clickable ? 0 : index === focusIndex ? -1 : undefined}
             >
               {props.imageKey ? <CardGridImage value={row[props.imageKey]} /> : null}
               <CardContent className="flex flex-col gap-1.5 p-4">
@@ -2904,7 +2914,10 @@ function CardGridComponent({ props }: { props: CardGridComponentProps }) {
       {remaining > 0 ? (
         <Button
           className="self-center"
-          onClick={() => setLimit((current) => current + CARD_GRID_PAGE_SIZE)}
+          onClick={() => {
+            setFocusIndex(limit);
+            setLimit(limit + CARD_GRID_PAGE_SIZE);
+          }}
           size="sm"
           type="button"
           variant="ghost"
