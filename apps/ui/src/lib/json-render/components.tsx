@@ -166,6 +166,14 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { cn, formatSmartTime } from "@/lib/utils";
 import { resolveScopedParams } from "./action-params";
 import { applyTemplate } from "./apply-template";
+import {
+  CARD_GRID_PAGE_SIZE,
+  cardGridFieldKind,
+  cardGridRowKey,
+  cardGridTitleText,
+  cardGridVisibleRows,
+  safeHttpUrl,
+} from "./card-grid-model";
 import type {
   ActionChain,
   BadgeTone,
@@ -402,17 +410,6 @@ function ProgressCell({ value, max }: { value: unknown; max?: number }) {
       </span>
     </span>
   );
-}
-
-/** Only absolute http(s) URLs become links — never `javascript:` or relative paths. */
-function safeHttpUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
-  } catch {
-    return null;
-  }
 }
 
 // ─── Shared cell helpers (Table cells + DetailList fields) ──────────────────
@@ -1516,12 +1513,19 @@ function TableComponent({ props }: { props: TableProps }) {
     const endAligned = column.align ? column.align === "end" : END_ALIGNED_KINDS.has(kind);
     return {
       headerName: column.label ?? column.key,
+      // A templated column has no `field`, so name the column explicitly.
+      colId: column.key,
       // A templated column has no single source field — its value is derived
       // from the whole row via `valueGetter` instead.
       field: template ? undefined : column.key,
       valueGetter: template
         ? (params: ValueGetterParams<Record<string, unknown>>) =>
             applyTemplate(template, params.data ?? {})
+        : undefined,
+      // Sort the composed text naturally ("v2" before "v10").
+      comparator: template
+        ? (a: unknown, b: unknown) =>
+            String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true })
         : undefined,
       // Explicit `width` pins a column; everything else stretches (`flex: 1`) from
       // a kind-appropriate floor. Never `sizeColumnsToFit` here — see the
@@ -1719,21 +1723,22 @@ function TableComponent({ props }: { props: TableProps }) {
         .map((column) => column.key)
         .filter((key) => key !== titleKey && key !== statusKey)
         .slice(0, 2);
+  // Same text as the desktop cell: a templated column renders its `format`.
+  const mobileCellText = (key: string, row: Record<string, unknown>): string => {
+    const column = columnByKey.get(key);
+    return column?.format ? applyTemplate(column.format, row) : formatValue(column?.kind, row[key]);
+  };
   const mobileRow =
     mobileMode === "list"
       ? (row: Record<string, unknown>): ListViewMobileRow => ({
-          title:
-            formatValue(
-              titleKey ? columnByKey.get(titleKey)?.kind : undefined,
-              titleKey ? row[titleKey] : "",
-            ) || "Untitled",
+          title: (titleKey ? mobileCellText(titleKey, row) : "") || "Untitled",
           status: statusKey
             ? statusNode(
                 columnByKey.get(statusKey) ?? { key: statusKey, kind: "badge" },
                 row[statusKey],
               )
             : undefined,
-          meta: metaKeys.map((key) => formatValue(columnByKey.get(key)?.kind, row[key])),
+          meta: metaKeys.map((key) => mobileCellText(key, row)),
         })
       : undefined;
 
@@ -2745,14 +2750,15 @@ function cardGridMetaItem(field: CardGridField, value: unknown): ReactNode | nul
     const raw = value === null || value === undefined ? "" : String(value);
     return raw ? <StatusPill text={raw} tone={badgeToneFor(field.tones, raw)} /> : null;
   }
-  const text = formatValue(field.kind, value);
+  const text = formatValue(cardGridFieldKind(field.kind, value), value);
   return text || null;
 }
 
 /**
- * Card image tile. Row data is writable by any app user, so only an absolute
- * http(s) URL becomes an `<img>` (never `javascript:` / `data:`); anything
- * else, or a load failure, shows the placeholder.
+ * Card image tile, rendered only when `imageKey` is set. Row data is writable
+ * by any app user, so only an absolute http(s) URL becomes an `<img>` (never
+ * `javascript:` / `data:`); anything else, or a load failure, shows the
+ * placeholder.
  */
 function CardGridImage({ value }: { value: unknown }) {
   const src = safeHttpUrl(value);
@@ -2777,17 +2783,22 @@ function CardGridImage({ value }: { value: unknown }) {
 
 /**
  * Responsive grid of data-bound cards — the visual counterpart to `Table` for
- * record browsers. Each row renders as a card with an image (or placeholder)
- * tile, a title, and an unlabeled meta line built from `fields`. With
- * `onClick` set, every card is a keyboard-reachable button that runs the
- * chain with `$row` / `$rowIndex` bound.
+ * record browsers. Each row renders as a card with an optional image tile, a
+ * title, and an unlabeled meta line built from `fields`. With `onClick` set,
+ * every card is a keyboard-reachable button that runs the chain with `$row` /
+ * `$rowIndex` bound. Renders `CARD_GRID_PAGE_SIZE` cards at a time behind a
+ * "Show more" button so a large query never mounts thousands of cards.
  */
 function CardGridComponent({ props }: { props: CardGridComponentProps }) {
   const runChain = useRowActionRunner();
+  // Not reset on data changes: a bound `data` array is rebuilt on every poll,
+  // and a reset would collapse the grid under the reader every few seconds.
+  const [limit, setLimit] = useState(CARD_GRID_PAGE_SIZE);
   const rows = Array.isArray(props.data) ? (props.data as Row[]) : [];
   const fields = (props.fields ?? []) as CardGridField[];
   const onClick = props.onClick as ActionChain | undefined;
   const clickable = (onClick?.length ?? 0) > 0;
+  const hasImage = Boolean(props.imageKey);
   const gridClassName = cn(
     "grid min-w-0",
     ...gridColumnClasses((props.columns as GridColumns) ?? CARD_GRID_DEFAULT_COLUMNS),
@@ -2809,7 +2820,7 @@ function CardGridComponent({ props }: { props: CardGridComponentProps }) {
       <div className={gridClassName} data-testid="json-render-card-grid">
         {Array.from({ length: CARD_GRID_SKELETON_COUNT }, (_, index) => (
           <UiCard key={index} className="gap-0 overflow-hidden py-0">
-            <Skeleton className="aspect-video w-full rounded-none" />
+            {hasImage ? <Skeleton className="aspect-video w-full rounded-none" /> : null}
             <CardContent className="flex flex-col gap-2 p-4">
               <Skeleton className="h-4 w-2/3" />
               <Skeleton className="h-3 w-1/3" />
@@ -2828,62 +2839,79 @@ function CardGridComponent({ props }: { props: CardGridComponentProps }) {
     );
   }
 
-  return (
-    <div className={gridClassName} data-testid="json-render-card-grid">
-      {rows.map((row, index) => {
-        const title = row[props.titleKey];
-        const titleText =
-          title === null || title === undefined || title === "" ? "—" : String(title);
-        const metaItems = fields
-          .map((field) => ({ key: field.key, node: cardGridMetaItem(field, row[field.key]) }))
-          .filter((item): item is { key: string; node: ReactNode } => item.node !== null);
-        const rowKey = typeof row.id === "string" || typeof row.id === "number" ? row.id : index;
-        const activate = clickable ? () => void runChain(onClick, row, index) : undefined;
+  const { visible, remaining } = cardGridVisibleRows(rows, limit);
 
-        return (
-          <UiCard
-            key={rowKey}
-            aria-label={clickable ? titleText : undefined}
-            className={cn(
-              "gap-0 overflow-hidden py-0",
-              clickable &&
-                "cursor-pointer outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
-            )}
-            onClick={activate}
-            onKeyDown={
-              activate
-                ? (event) => {
-                    if (event.target !== event.currentTarget) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      // Space would otherwise scroll the page.
-                      event.preventDefault();
-                      activate();
+  return (
+    <div className="flex min-w-0 flex-col gap-3" data-testid="json-render-card-grid">
+      <div className={gridClassName}>
+        {visible.map((row, index) => {
+          const titleText = cardGridTitleText(row[props.titleKey]);
+          const metaItems = fields
+            .map((field, itemIndex) => ({
+              key: `${itemIndex}:${field.key}`,
+              node: cardGridMetaItem(field, row[field.key]),
+            }))
+            .filter((item): item is { key: string; node: ReactNode } => item.node !== null);
+          const activate = clickable ? () => void runChain(onClick, row, index) : undefined;
+
+          return (
+            <UiCard
+              key={cardGridRowKey(row, index)}
+              className={cn(
+                "gap-0 overflow-hidden py-0",
+                clickable &&
+                  "cursor-pointer outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+              )}
+              onClick={activate}
+              onKeyDown={
+                activate
+                  ? (event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        // Space would otherwise scroll the page.
+                        event.preventDefault();
+                        activate();
+                      }
                     }
-                  }
-                : undefined
-            }
-            role={clickable ? "button" : undefined}
-            tabIndex={clickable ? 0 : undefined}
-          >
-            <CardGridImage value={props.imageKey ? row[props.imageKey] : undefined} />
-            <CardContent className="flex flex-col gap-1.5 p-4">
-              <p className="m-0 line-clamp-2 text-sm font-medium text-foreground" title={titleText}>
-                {titleText}
-              </p>
-              {metaItems.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  {metaItems.map((item, itemIndex) => (
-                    <span key={item.key} className="flex items-center gap-1.5">
-                      {itemIndex > 0 && <span aria-hidden="true">·</span>}
-                      {item.node}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </CardContent>
-          </UiCard>
-        );
-      })}
+                  : undefined
+              }
+              role={clickable ? "button" : undefined}
+              tabIndex={clickable ? 0 : undefined}
+            >
+              {props.imageKey ? <CardGridImage value={row[props.imageKey]} /> : null}
+              <CardContent className="flex flex-col gap-1.5 p-4">
+                <p
+                  className="m-0 line-clamp-2 text-sm font-medium text-foreground"
+                  title={titleText}
+                >
+                  {titleText}
+                </p>
+                {metaItems.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    {metaItems.map((item, itemIndex) => (
+                      <span key={item.key} className="flex items-center gap-1.5">
+                        {itemIndex > 0 && <span aria-hidden="true">·</span>}
+                        {item.node}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </CardContent>
+            </UiCard>
+          );
+        })}
+      </div>
+      {remaining > 0 ? (
+        <Button
+          className="self-center"
+          onClick={() => setLimit((current) => current + CARD_GRID_PAGE_SIZE)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          Show more ({remaining} remaining)
+        </Button>
+      ) : null}
     </div>
   );
 }

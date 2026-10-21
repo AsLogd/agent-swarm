@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { applyTemplate } from "./apply-template";
+import { applyTemplate, TEMPLATE_MAX_CHARS } from "./apply-template";
+import { JSON_PREVIEW_MAX_CHARS } from "./json-preview";
 
 describe("applyTemplate", () => {
   test("replaces each {{field}} with the row value", () => {
@@ -56,5 +57,25 @@ describe("applyTemplate", () => {
 
   test("malformed placeholders are left as-is", () => {
     expect(applyTemplate("{{}} {{a-b}} {name}", { name: "Alpha" })).toBe("{{}} {{a-b}} {name}");
+  });
+
+  test("inherited names such as constructor and __proto__ read nothing", () => {
+    expect(applyTemplate("[{{constructor}}|{{__proto__}}|{{toString}}]", { name: "Alpha" })).toBe(
+      "[||]",
+    );
+  });
+
+  test("an object substitution is cut to the json preview length", () => {
+    const big = { text: "x".repeat(500) };
+    const out = applyTemplate("{{big}}", { big });
+    expect(out).toBe(`${JSON.stringify(big).slice(0, JSON_PREVIEW_MAX_CHARS)}…`);
+  });
+
+  test("the whole result is capped with an ellipsis", () => {
+    const out = applyTemplate("{{a}}{{a}}", { a: "y".repeat(400) });
+    expect(out).toBe(`${"y".repeat(TEMPLATE_MAX_CHARS)}…`);
+    expect(applyTemplate("{{a}}", { a: "z".repeat(TEMPLATE_MAX_CHARS) })).toBe(
+      "z".repeat(TEMPLATE_MAX_CHARS),
+    );
   });
 });

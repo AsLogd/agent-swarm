@@ -185,23 +185,24 @@ const stackProps = z.object({
 /** Grid tracks are capped at 6 — beyond that a page is a table, not a layout. */
 const gridColumnCount = z.number().int().min(1).max(6);
 
+/** Responsive column shorthand shared by `Grid.columns` and `CardGrid.columns`. */
+const gridColumnsSchema = z.union([
+  gridColumnCount,
+  z.object({
+    base: gridColumnCount.optional(),
+    sm: gridColumnCount.optional(),
+    md: gridColumnCount.optional(),
+    lg: gridColumnCount.optional(),
+  }),
+]);
+
 const gridProps = z.object({
   /**
    * A bare count is responsive shorthand: 1 column on phones, 2 from `sm`,
    * the declared count from `md` up. The object form pins breakpoints
    * explicitly.
    */
-  columns: z
-    .union([
-      gridColumnCount,
-      z.object({
-        base: gridColumnCount.optional(),
-        sm: gridColumnCount.optional(),
-        md: gridColumnCount.optional(),
-        lg: gridColumnCount.optional(),
-      }),
-    ])
-    .optional(),
+  columns: gridColumnsSchema.optional(),
   gap: spacing.optional(),
   padding: spacing.optional(),
 });
@@ -513,9 +514,10 @@ const tableColumnSchema = z.object({
   pinned: z.enum(["left", "right"]).optional(),
   /**
    * Combine several row fields into one cell via `{{field}}` placeholders
-   * (e.g. `"{{name}} · v{{version}}"`). Overrides `key`-based rendering when
-   * set: `key` still anchors the column identity (header fallback, `search`,
-   * `filters`, the phone list), but the displayed text comes from the
+   * (e.g. `"{{name}} · v{{version}}"`; names match `[\w.]+`, no hyphens or
+   * spaces). Overrides `key`-based rendering when set: `key` still anchors
+   * the column identity (header fallback, `search`, `filters`), but the
+   * displayed text — on desktop and in the phone list — comes from the
    * template, with missing fields substituted as empty strings. `kind` is
    * ignored on a templated column.
    */
@@ -808,8 +810,9 @@ const cardGridFieldSchema = z.object({
   /** Property key in the bound row object. Meta fields render unlabeled, so there is no `label` prop. */
   key: z.string(),
   /**
-   * Same text kinds as Table columns (`badge` → status pill, `date` → smart
-   * relative time, `json` → compact truncated single-line JSON preview).
+   * One of `text`, `string`, `enum`, `number`, `boolean`, `date` (smart
+   * relative time), `badge` (status pill) or `json` (truncated single-line
+   * preview). Without a kind, an object/array value renders like `json`.
    */
   kind: z.enum(["text", "string", "number", "boolean", "date", "badge", "enum", "json"]).optional(),
   /** For `kind: "badge"` — value → badge tone. Falls back to `neutral`. */
@@ -821,22 +824,16 @@ const cardGridProps = z.object({
   data: z.array(z.record(z.string(), z.unknown())).optional(),
   /** Row field rendered as the card title. */
   titleKey: z.string(),
-  /** Row field holding an absolute http(s) image URL; any other per-row value renders a placeholder tile instead. */
+  /**
+   * Row field holding an absolute http(s) image URL. Omit it for cards with
+   * no image tile; when set, any other per-row value or a failed load
+   * renders a placeholder tile.
+   */
   imageKey: z.string().optional(),
   /** Secondary metadata rendered under the title (e.g. created date, author), joined inline with `·`. */
   fields: z.array(cardGridFieldSchema).optional(),
   /** Same responsive shorthand as `Grid.columns` (default `{ base: 1, sm: 2, md: 3 }`). */
-  columns: z
-    .union([
-      gridColumnCount,
-      z.object({
-        base: gridColumnCount.optional(),
-        sm: gridColumnCount.optional(),
-        md: gridColumnCount.optional(),
-        lg: gridColumnCount.optional(),
-      }),
-    ])
-    .optional(),
+  columns: gridColumnsSchema.optional(),
   /** Action chain run when a card is clicked. Params may reference `$row` / `$rowIndex`. */
   onClick: actionChainSchema.optional(),
   /** Usually `{ "$state": "/queries/<name>/loading" }`. */
@@ -1027,7 +1024,7 @@ export const swarmCatalogSpec = {
     Table: {
       props: tableProps,
       description:
-        'Data table. Bind `data`/`loading`/`error` to a named query (`/queries/<name>/...`). `rowActions` chains receive `{ "$row": "<col>" }` (or `{ "$row": "" }` for the whole row) and `{ "$rowIndex": true }`. Destructive row actions always confirm via a dialog; override the copy with `confirm: { title, description, confirmLabel }`. `search` (case-insensitive substring across every listed column) and `filters` (per-column equality, `null`/`""` disables one; an array means "one of", which is what a multiple `Chips` writes, and an empty array disables it) narrow the polled rows client-side — bind them to a `SearchInput` / `Select` via `/ui/<id>/value`, or pin a constant (e.g. `"filters": { "pinned": true }`). Columns take `pinned: "left"|"right"` to survive horizontal scroll; `pagination` pages large row sets (auto past 200 rows); `density: "compact"` tightens row height. Column kinds: `status` (lifecycle values like pending/in_progress/completed/failed get the dashboard status icon, anything else a `tones` pill), `user` / `agent` (avatar + name), `relative` (smart time with the exact time on hover), `duration` (ms → 1m 23s), `progress` (bar, `max` default 100), `copy` (value + copy button), `switch` (runs the column\'s `onChange` chain with `$row` set to the new value; read-only without it), `link` (http(s) URL, opens in a new tab), `json` (compact single-line `JSON.stringify` preview, truncated). Columns also take `align`, `truncate: "middle"` (ids, paths), a header `icon` and `tooltip` (a row field shown on hover), and `format` — a `{{field}}` template (e.g. `"{{name}} · v{{version}}"`) that combines several row fields into one cell and overrides `key`/`kind` rendering (sorting uses the composed text; `search`, `filters` and the phone list still read the column\'s `key`). `onRowClick` runs a chain with `$row` when a row is clicked — pair it with `app.navigate` + a Drawer and bind `selectedId` to the drawer param to highlight the open row. `rowId` names the id field (default `id`). Below 768px the table renders as a phone list (`mobile: "list"`, fields picked by `mobileFields: { title, subtitle?, meta?, status? }`); `mobile: "scroll"` keeps the grid. `emptyState: { icon?, title, body? }` replaces the empty message. Row actions take `icon` and `placement: "menu"` (collected into a More menu).',
+        'Data table. Bind `data`/`loading`/`error` to a named query (`/queries/<name>/...`). `rowActions` chains receive `{ "$row": "<col>" }` (or `{ "$row": "" }` for the whole row) and `{ "$rowIndex": true }`. Destructive row actions always confirm via a dialog; override the copy with `confirm: { title, description, confirmLabel }`. `search` (case-insensitive substring across every listed column) and `filters` (per-column equality, `null`/`""` disables one; an array means "one of", which is what a multiple `Chips` writes, and an empty array disables it) narrow the polled rows client-side — bind them to a `SearchInput` / `Select` via `/ui/<id>/value`, or pin a constant (e.g. `"filters": { "pinned": true }`). Columns take `pinned: "left"|"right"` to survive horizontal scroll; `pagination` pages large row sets (auto past 200 rows); `density: "compact"` tightens row height. Column kinds: `status` (lifecycle values like pending/in_progress/completed/failed get the dashboard status icon, anything else a `tones` pill), `user` / `agent` (avatar + name), `relative` (smart time with the exact time on hover), `duration` (ms → 1m 23s), `progress` (bar, `max` default 100), `copy` (value + copy button), `switch` (runs the column\'s `onChange` chain with `$row` set to the new value; read-only without it), `link` (http(s) URL, opens in a new tab), `json` (compact single-line `JSON.stringify` preview, truncated). Columns also take `align`, `truncate: "middle"` (ids, paths), a header `icon` and `tooltip` (a row field shown on hover), and `format` — a `{{field}}` template (e.g. `"{{name}} · v{{version}}"`) that combines several row fields into one cell and overrides `key`/`kind` rendering on desktop and in the phone list (placeholder names match `[w.]+`, no hyphens or spaces; sorting uses the composed text; `search` and `filters` still read the column\'s `key`). `onRowClick` runs a chain with `$row` when a row is clicked — pair it with `app.navigate` + a Drawer and bind `selectedId` to the drawer param to highlight the open row. `rowId` names the id field (default `id`). Below 768px the table renders as a phone list (`mobile: "list"`, fields picked by `mobileFields: { title, subtitle?, meta?, status? }`); `mobile: "scroll"` keeps the grid. `emptyState: { icon?, title, body? }` replaces the empty message. Row actions take `icon` and `placement: "menu"` (collected into a More menu).',
     },
     Form: {
       props: formProps,
@@ -1048,7 +1045,7 @@ export const swarmCatalogSpec = {
     CardGrid: {
       props: cardGridProps,
       description:
-        "Responsive grid of data-bound cards, one per row — the visual counterpart to `Table` for record browsers (projects, documents, media). Bind `data`/`loading`/`error` to a named query like Table. `titleKey` picks the row field shown as the card title; `imageKey` picks a row field holding an absolute http(s) image URL (any other per-row value, or a failed load, renders a placeholder tile, so it is safe to omit entirely). `fields` render as an unlabeled `·`-joined meta line under the title (same kinds as Table columns — e.g. `date` for a created-at stamp, `text` for an author, `badge` with `tones` for a status). `onClick` is an action chain (params may use `$row` / `$rowIndex`) dispatched on card click or Enter/Space, commonly `app.navigate` into a detail page. `columns` is the same responsive shorthand as `Grid.columns` (default `{ base: 1, sm: 2, md: 3 }`).",
+        "Responsive grid of data-bound cards, one per row \u2014 the visual counterpart to `Table` for record browsers (projects, documents, media). Bind `data`/`loading`/`error` to a named query like Table. `titleKey` picks the row field shown as the card title. `imageKey` picks a row field holding an absolute http(s) image URL and adds an image tile to every card (a non-URL value or a failed load shows a placeholder); omit it for text-only cards. `fields` render as an unlabeled `\u00b7`-joined meta line under the title; each field's `kind` is one of `text`, `string`, `enum`, `number`, `boolean`, `date`, `badge` (with `tones`) or `json`. `onClick` is an action chain (params may use `$row` / `$rowIndex`) dispatched on card click or Enter/Space, commonly `app.navigate` into a detail page. `columns` is the same responsive shorthand as `Grid.columns` (default `{ base: 1, sm: 2, md: 3 }`). Renders 200 cards at a time with a Show more button.",
     },
     Kanban: {
       props: kanbanProps,
