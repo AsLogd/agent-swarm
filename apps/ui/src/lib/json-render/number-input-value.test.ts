@@ -28,4 +28,16 @@ describe("parseNumberInputValue", () => {
     expect(parseNumberInputValue("-5", undefined, 10)).toBe(-5);
     expect(parseNumberInputValue("", 1, 10)).toBeNull();
   });
+
+  test("the blur snap shows the clamped number and leaves other text alone", () => {
+    // NumberInput's onBlur: `String(parsed)` when a number comes back, else keep the text.
+    const snap = (text: string) => {
+      const settled = parseNumberInputValue(text, 1, 10);
+      return typeof settled === "number" ? String(settled) : text;
+    };
+    expect(snap(" 99 ")).toBe("10");
+    expect(snap("007")).toBe("7");
+    expect(snap("")).toBe("");
+    expect(snap("-")).toBe("-");
+  });
 });

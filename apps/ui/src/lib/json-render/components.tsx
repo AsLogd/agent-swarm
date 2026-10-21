@@ -876,7 +876,7 @@ function NumberInputComponent({ props }: { props: NumberInputProps }) {
   setRef.current = set;
   // Last value THIS component pushed — mirrors SearchInput's echo guard so an
   // external write (not our own commit) can still override the local mirror.
-  const pushedRef = useRef<number | null>(null);
+  const pushedRef = useRef<number | null>(parseNumberInputValue(text) ?? null);
 
   const stored = getByPath(state, path);
   useEffect(() => {
@@ -891,10 +891,13 @@ function NumberInputComponent({ props }: { props: NumberInputProps }) {
       {props.label ? <Label htmlFor={inputId}>{props.label}</Label> : null}
       <Input
         id={inputId}
-        type="number"
-        inputMode="numeric"
-        min={props.min}
-        max={props.max}
+        // A text field, not `type="number"`: the browser sanitizes a number
+        // input to "" while the text is a non-numeric edit ("5" → select-all →
+        // "-", or "1" → "1e"), which would write `null` to the store mid-edit
+        // and briefly drop a bound Table's filter. Plain text hands us the raw
+        // characters, so `parseNumberInputValue` can leave the store untouched.
+        type="text"
+        inputMode="decimal"
         placeholder={props.placeholder}
         aria-label={props.label ?? props.placeholder ?? "Number"}
         value={text}
@@ -902,11 +905,17 @@ function NumberInputComponent({ props }: { props: NumberInputProps }) {
           const raw = event.target.value;
           setText(raw);
           const next = parseNumberInputValue(raw, props.min, props.max);
-          // `undefined` is a non-numeric in-progress edit (e.g. a bare "-"):
+          // `undefined` is non-numeric text (a bare "-" mid-edit, letters):
           // leave the store untouched instead of clobbering it.
           if (next === undefined) return;
           pushedRef.current = next;
           setRef.current(path, next);
+        }}
+        onBlur={() => {
+          // Snap the visible text to the clamped stored value on leaving the
+          // field; empty or non-numeric text stays as typed.
+          const settled = parseNumberInputValue(text, props.min, props.max);
+          if (typeof settled === "number") setText(String(settled));
         }}
       />
     </div>

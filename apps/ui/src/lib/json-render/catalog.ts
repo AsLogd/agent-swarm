@@ -263,7 +263,7 @@ const chipsProps = z.object({
 });
 
 const numberInputProps = z.object({
-  /** State id — the parsed number (or `null` when empty/invalid) lands at `/ui/<id>/value`. */
+  /** State id — the parsed number lands at `/ui/<id>/value`: `null` when empty; non-numeric text leaves it untouched. */
   id: z.string(),
   label: z.string().optional(),
   placeholder: z.string().optional(),
@@ -899,7 +899,7 @@ export const swarmCatalogSpec = {
     NumberInput: {
       props: numberInputProps,
       description:
-        "Labelled numeric input (no debounce). Writes the parsed number into state at `/ui/<id>/value` on every change, or `null` when the field is empty; an unparseable in-progress value (e.g. a bare '-') leaves the stored value untouched until it resolves. `min`/`max` clamp the committed value.",
+        "Labelled numeric text field (decimal keyboard on touch devices, no debounce). Writes the parsed number into state at `/ui/<id>/value` on every change, or `null` when the field is empty; non-numeric text (a bare '-' mid-edit, letters) leaves the stored value untouched until it parses. `min`/`max` clamp the stored value, and the visible text snaps to that clamped value when the field loses focus.",
     },
     Button: {
       props: buttonProps,
