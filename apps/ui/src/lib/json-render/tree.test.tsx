@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { act } from "react";
-import { TREE_MAX_ROWS } from "./tree-model";
+import { TREE_MAX_DEPTH, TREE_MAX_ROWS } from "./tree-model";
 
 GlobalRegistrator.register();
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -193,6 +193,38 @@ test("a doc past the row cap renders the first rows plus a notice, and rows stil
   await act(async () => rows(host)[7]?.click());
   expect(changes).toEqual([{ path: "/ui/nodes/value", value: "k7" }]);
   expect(selectedKeys(host)).toEqual(["k7"]);
+  await unmount();
+});
+
+test("a branch past the depth cap keeps a disabled chevron and shows no footer", async () => {
+  const length = TREE_MAX_DEPTH + 8;
+  const deep: Record<string, { type: string; children?: string[] }> = {};
+  for (let i = 0; i < length; i++) {
+    deep[`n${i}`] = { type: "Stack", children: i + 1 < length ? [`n${i + 1}`] : undefined };
+  }
+  const { host, changes, unmount } = await mount({
+    id: "nodes",
+    nodes: { root: "n0", elements: deep },
+  });
+  expect(rows(host).length).toBe(TREE_MAX_DEPTH + 1);
+  expect(host.querySelector('li[data-slot="tree-truncated"]')).toBeNull();
+
+  const last = rows(host).at(-1) as HTMLButtonElement;
+  const chevron = last.parentElement?.querySelector<HTMLButtonElement>("button[aria-expanded]");
+  expect(chevron?.disabled).toBe(true);
+  expect(chevron?.getAttribute("aria-expanded")).toBe("false");
+  expect(chevron?.getAttribute("title")).toBe("Depth limit reached");
+  const first =
+    rows(host)[0]?.parentElement?.querySelector<HTMLButtonElement>("button[aria-expanded]");
+  expect(first?.disabled).toBe(false);
+  expect(first?.hasAttribute("title")).toBe(false);
+
+  await press(last, "ArrowRight");
+  expect(rows(host).length).toBe(TREE_MAX_DEPTH + 1);
+
+  await act(async () => last.click());
+  expect(changes).toEqual([{ path: "/ui/nodes/value", value: `n${TREE_MAX_DEPTH}` }]);
+  expect(selectedKeys(host)).toEqual([`n${TREE_MAX_DEPTH}`]);
   await unmount();
 });
 

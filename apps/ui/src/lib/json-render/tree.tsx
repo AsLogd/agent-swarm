@@ -29,8 +29,9 @@
  * whatever height that gives it (ignores `maxHeight`).
  *
  * The doc is untrusted and a shared subtree is expanded under every parent,
- * so the walk is capped at `TREE_MAX_ROWS` rows and `TREE_MAX_DEPTH` levels;
- * past either cap a final muted row says the outline was cut short.
+ * so the walk is cut at `TREE_MAX_ROWS` rows — a final muted row says so —
+ * and a branch deeper than `TREE_MAX_DEPTH` levels is not walked into: that
+ * row keeps a collapsed, disabled chevron instead.
  *
  * Keyboard: rows are buttons in the Tab order; ArrowLeft collapses and
  * ArrowRight expands the focused row. The chevrons are click targets only,
@@ -78,12 +79,12 @@ function TreeRow({
   onSelect: (key: string) => void;
   onToggle: (key: string) => void;
 }) {
-  const { key, type, depth, isLast, ancestorLines, hasChildren, expanded } = row;
+  const { key, type, depth, isLast, ancestorLines, hasChildren, expanded, capped } = row;
   const isSelected = selected === key;
   const isOddRow = index % 2 === 1;
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (!hasChildren) return;
+    if (!hasChildren || capped) return;
     const collapse = event.key === "ArrowLeft" && expanded;
     const expand = event.key === "ArrowRight" && !expanded;
     if (!collapse && !expand) return;
@@ -108,10 +109,12 @@ function TreeRow({
           <button
             type="button"
             tabIndex={-1}
+            disabled={capped}
             aria-label={expanded ? "Collapse" : "Expand"}
             aria-expanded={expanded}
-            className="flex size-4 shrink-0 items-center justify-center text-muted-foreground"
-            onClick={() => onToggle(key)}
+            title={capped ? "Depth limit reached" : undefined}
+            className="flex size-4 shrink-0 items-center justify-center text-muted-foreground disabled:opacity-50"
+            onClick={capped ? undefined : () => onToggle(key)}
           >
             {expanded ? (
               <ChevronDown className="size-3.5" />

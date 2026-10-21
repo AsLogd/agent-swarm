@@ -40,10 +40,16 @@ export interface TreeRowModel {
   ancestorLines: boolean[];
   /**
    * The row has children to show (after the cycle guard). True for a collapsed
-   * branch too, so the chevron renders.
+   * or capped branch too, so the chevron renders.
    */
   hasChildren: boolean;
+  /** False for a collapsed or capped row: its children are not emitted. */
   expanded: boolean;
+  /**
+   * The row sits at `TREE_MAX_DEPTH` and has children that are not walked
+   * into. It renders a collapsed, disabled chevron.
+   */
+  capped: boolean;
 }
 
 /**
@@ -55,14 +61,14 @@ export interface TreeRowModel {
 export const TREE_MAX_ROWS = 2000;
 
 /**
- * Deepest row level (0-based) that is walked into. A row at this depth keeps
- * its chevron but its children are not emitted.
+ * Deepest row level (0-based) that is emitted; a row at this depth keeps its
+ * chevron but is not walked into.
  */
 export const TREE_MAX_DEPTH = 32;
 
 export interface FlattenedTree {
   rows: TreeRowModel[];
-  /** True when the row or depth cap cut the walk short. */
+  /** True when the row cap cut the walk short. The depth cap marks rows `capped` instead. */
   truncated: boolean;
 }
 
@@ -132,9 +138,10 @@ export function nodeType(node: TreeNode | undefined): string {
  * A key reachable through two different parents is listed under each.
  *
  * The walk is iterative (an explicit frame stack, so depth can never overflow
- * the call stack) and stops as soon as `TREE_MAX_ROWS` rows exist or a row
- * sits at `TREE_MAX_DEPTH`; work is bounded by the caps, not by the size of
- * the expansion the doc describes.
+ * the call stack). It stops as soon as `TREE_MAX_ROWS` rows exist (`truncated`)
+ * and does not walk into a row at `TREE_MAX_DEPTH` (that row is `capped`);
+ * work is bounded by the caps, not by the size of the expansion the doc
+ * describes.
  */
 export function flattenVisible(
   keys: readonly string[],
@@ -174,7 +181,8 @@ export function flattenVisible(
     const children = frame.ancestors.has(key) ? [] : childrenOf(key);
     const isLast = index === frame.level.length - 1;
     const hasChildren = children.length > 0;
-    const expanded = !collapsed.has(key);
+    const capped = hasChildren && frame.depth >= TREE_MAX_DEPTH;
+    const expanded = !capped && !collapsed.has(key);
     const quoted = JSON.stringify(key);
     const id = frame.parentId === null ? quoted : `${frame.parentId}/${quoted}`;
     rows.push({
@@ -186,12 +194,9 @@ export function flattenVisible(
       ancestorLines: frame.ancestorLines,
       hasChildren,
       expanded,
+      capped,
     });
     if (!hasChildren || !expanded) continue;
-    if (frame.depth >= TREE_MAX_DEPTH) {
-      truncated = true;
-      continue;
-    }
     stack.push({
       level: children,
       next: 0,

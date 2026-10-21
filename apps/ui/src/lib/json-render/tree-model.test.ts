@@ -120,6 +120,7 @@ describe("flattenVisible", () => {
       { key: "d", type: "Text", depth: 0, isLast: true, ancestorLines: [], hasChildren: false },
     ]);
     expect(rows.every((row) => row.expanded)).toBe(true);
+    expect(rows.some((row) => row.capped)).toBe(false);
   });
 
   test("a collapsed key hides its subtree but still reports children", () => {
@@ -229,66 +230,92 @@ describe("flattenVisible caps", () => {
     return { root, elements: leaves };
   }
 
-  function timed(doc: { root: string[]; elements: Record<string, TreeNode> }) {
-    const started = performance.now();
-    const result = flattenVisible(doc.root, doc.elements, none);
-    return { ...result, elapsed: performance.now() - started };
-  }
+  const walk = (doc: { root: string[]; elements: Record<string, TreeNode> }) =>
+    flattenVisible(doc.root, doc.elements, none);
+  const cappedKeys = (rows: TreeRowModel[]) =>
+    rows.filter((row) => row.capped).map((row) => row.key);
 
-  test("a normal doc is not truncated", () => {
-    expect(flattenVisible(["a", "d"], elements, none).truncated).toBe(false);
+  // No timing assertions: an exponential regression would hang into Bun's
+  // per-test timeout, and the row-count assertions already fail without the cap.
+
+  test("a normal doc is neither truncated nor capped", () => {
+    const { rows, truncated } = flattenVisible(["a", "d"], elements, none);
+    expect(truncated).toBe(false);
+    expect(cappedKeys(rows)).toEqual([]);
   });
 
-  test("a layered shared-subtree DAG is cut at TREE_MAX_ROWS rows, quickly", () => {
-    const { rows, truncated, elapsed } = timed(layeredDag(40));
+  test("a layered shared-subtree DAG is cut at TREE_MAX_ROWS rows", () => {
+    const { rows, truncated } = walk(layeredDag(40));
     expect(rows.length).toBe(TREE_MAX_ROWS);
     expect(truncated).toBe(true);
-    expect(elapsed).toBeLessThan(500);
   });
 
   test("the row cap is exact: TREE_MAX_ROWS rows pass, one more is cut", () => {
-    const exact = timed(wide(TREE_MAX_ROWS));
+    const exact = walk(wide(TREE_MAX_ROWS));
     expect(exact.rows.length).toBe(TREE_MAX_ROWS);
     expect(exact.truncated).toBe(false);
 
-    const over = timed(wide(TREE_MAX_ROWS + 1));
+    const over = walk(wide(TREE_MAX_ROWS + 1));
     expect(over.rows.length).toBe(TREE_MAX_ROWS);
     expect(over.truncated).toBe(true);
   });
 
   test("a 50,000-key doc is cut at the row cap without walking the rest", () => {
-    const { rows, truncated, elapsed } = timed(wide(50_000));
+    const { rows, truncated } = walk(wide(50_000));
     expect(rows.length).toBe(TREE_MAX_ROWS);
     expect(truncated).toBe(true);
-    expect(elapsed).toBeLessThan(500);
   });
 
-  test("a 50,000-element chain does not overflow the stack and is cut at the depth cap", () => {
-    const { rows, truncated } = timed(chain(50_000));
-    expect(truncated).toBe(true);
+  test("a 50,000-element chain does not overflow the stack: its last row is capped, not truncated", () => {
+    const { rows, truncated } = walk(chain(50_000));
+    expect(truncated).toBe(false);
     expect(rows.length).toBe(TREE_MAX_DEPTH + 1);
     expect(rows.at(-1)).toMatchObject({
       key: `n${TREE_MAX_DEPTH}`,
       depth: TREE_MAX_DEPTH,
       hasChildren: true,
-      expanded: true,
+      expanded: false,
+      capped: true,
+    });
+    expect(cappedKeys(rows)).toEqual([`n${TREE_MAX_DEPTH}`]);
+  });
+
+  test("the depth cap is exact: a chain ending at TREE_MAX_DEPTH has no capped row, one deeper does", () => {
+    const fits = walk(chain(TREE_MAX_DEPTH + 1));
+    expect(fits.rows.length).toBe(TREE_MAX_DEPTH + 1);
+    expect(fits.truncated).toBe(false);
+    expect(cappedKeys(fits.rows)).toEqual([]);
+    expect(fits.rows.at(-1)).toMatchObject({ depth: TREE_MAX_DEPTH, hasChildren: false });
+
+    const over = walk(chain(TREE_MAX_DEPTH + 2));
+    expect(over.rows.length).toBe(TREE_MAX_DEPTH + 1);
+    expect(over.truncated).toBe(false);
+    expect(over.rows.at(-1)).toMatchObject({
+      depth: TREE_MAX_DEPTH,
+      hasChildren: true,
+      expanded: false,
+      capped: true,
     });
   });
 
-  test("the depth cap is exact: a chain ending at TREE_MAX_DEPTH is complete, one deeper is cut", () => {
-    const fits = timed(chain(TREE_MAX_DEPTH + 1));
-    expect(fits.rows.length).toBe(TREE_MAX_DEPTH + 1);
-    expect(fits.truncated).toBe(false);
-
-    const over = timed(chain(TREE_MAX_DEPTH + 2));
-    expect(over.rows.length).toBe(TREE_MAX_DEPTH + 1);
-    expect(over.truncated).toBe(true);
-  });
-
-  test("a collapsed branch at the depth cap is not a truncation", () => {
+  test("a capped row stays capped and collapsed whatever the collapsed set says", () => {
     const deep = chain(100);
     const result = flattenVisible(deep.root, deep.elements, new Set([`n${TREE_MAX_DEPTH}`]));
     expect(result.rows.length).toBe(TREE_MAX_DEPTH + 1);
     expect(result.truncated).toBe(false);
+    expect(result.rows.at(-1)).toMatchObject({ capped: true, expanded: false });
+  });
+
+  test("a doc can be both truncated and capped", () => {
+    const leaves = wide(TREE_MAX_ROWS);
+    const line = chain(100);
+    const { rows, truncated } = flattenVisible(
+      ["n0", ...leaves.root],
+      { ...line.elements, ...leaves.elements },
+      none,
+    );
+    expect(truncated).toBe(true);
+    expect(rows.length).toBe(TREE_MAX_ROWS);
+    expect(cappedKeys(rows)).toEqual([`n${TREE_MAX_DEPTH}`]);
   });
 });

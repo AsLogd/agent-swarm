@@ -554,7 +554,7 @@ ContributionGraph details:
 
 Tree details:
 
-- `nodes` is a doc-shaped value: `{ root: string | string[], elements: { <key>: { type, children?: string[] } } }`, the json-render flat element map. Usually bind it to a json column: `{ "$state": "/queries/<name>/data/0/<column>" }`. A malformed or absent value renders an empty state; a `children` key missing from `elements` shows as `key — ?`. Very large or heavily shared outlines are cut at 2,000 rows / 32 levels with a notice.
+- `nodes` is a doc-shaped value: `{ root: string | string[], elements: { <key>: { type, children?: string[] } } }`, the json-render flat element map. Usually bind it to a json column: `{ "$state": "/queries/<name>/data/0/<column>" }`. A malformed or absent value renders an empty state; a `children` key missing from `elements` shows as `key — ?`. Outlines are cut at 2,000 rows with a notice; branches deeper than 32 levels keep a disabled chevron.
 - Each row shows `key — type`. Clicking a row writes its key to `/ui/<id>/value`, and the row bound to that path renders selected; read the selection with `{ "$state": "/ui/<id>/value" }`. The Tree never writes `null`: when the selected key leaves the doc (a refetch, an edit) the stored key stays and no row renders selected. Selection and collapse are keyed by node key, so a key reachable through two parents selects and collapses in both places.
 - Rows scroll inside `maxHeight` (default `480px`). Set `fill: true` inside a `fill` Stack or Split pane to grow to that height instead and scroll within it (ignores `maxHeight`).
 

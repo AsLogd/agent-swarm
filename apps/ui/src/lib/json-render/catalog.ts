@@ -1029,7 +1029,7 @@ export const swarmCatalogSpec = {
     Tree: {
       props: treeProps,
       description:
-        'Collapsible tree view of a json-render flat element map. Bind `nodes` to a doc-shaped value (`{ root: string | string[], elements: Record<key,{type,children?}> }`) — usually `{ "$state": "/queries/<name>/data/0/<jsonColumn>" }`. Each row shows `key — type`; clicking one writes the node key to `/ui/<id>/value`, and the row bound to that path renders selected. A malformed or absent `nodes` value renders an empty state. Rows scroll inside a fixed-height viewport — `maxHeight` overrides the default `480px` — or set `fill: true` to grow inside a `fill`-aware parent and scroll within whatever height that gives it instead (ignores `maxHeight`). Very large or heavily shared outlines are cut at 2,000 rows / 32 levels with a notice.',
+        'Collapsible tree view of a json-render flat element map. Bind `nodes` to a doc-shaped value (`{ root: string | string[], elements: Record<key,{type,children?}> }`) — usually `{ "$state": "/queries/<name>/data/0/<jsonColumn>" }`. Each row shows `key — type`; clicking one writes the node key to `/ui/<id>/value`, and the row bound to that path renders selected. A malformed or absent `nodes` value renders an empty state. Rows scroll inside a fixed-height viewport — `maxHeight` overrides the default `480px` — or set `fill: true` to grow inside a `fill`-aware parent and scroll within whatever height that gives it instead (ignores `maxHeight`). Outlines are cut at 2,000 rows with a notice; branches deeper than 32 levels keep a disabled chevron.',
     },
     ElementRef: {
       props: elementRefProps,
