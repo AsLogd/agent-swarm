@@ -34,6 +34,7 @@ import type {
   ColDef,
   FullWidthCellKeyDownEvent,
   ICellRendererParams,
+  ValueGetterParams,
 } from "ag-grid-community";
 import { eachDayOfInterval, format, parseISO, startOfDay, subDays } from "date-fns";
 import { Provider as JotaiProvider } from "jotai";
@@ -44,6 +45,7 @@ import {
   Bot,
   CheckCircle,
   ExternalLink,
+  Image as ImageIcon,
   Inbox,
   Info,
   Minus,
@@ -163,9 +165,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { cn, formatSmartTime } from "@/lib/utils";
 import { resolveScopedParams } from "./action-params";
+import { applyTemplate } from "./apply-template";
 import type {
   ActionChain,
   BadgeTone,
+  CardGridField,
   ChipOption,
   DetailListField,
   DrawerAction,
@@ -607,12 +611,14 @@ function clampColumns(value: unknown): number | undefined {
   return Math.min(6, Math.max(1, Math.round(value)));
 }
 
-function GridComponent({ props, children }: { props: GridProps; children: ReactNode }) {
-  const columns = props.columns as GridColumns;
+/**
+ * `grid-cols-N` classes per breakpoint for `Grid.columns` / `CardGrid.columns`.
+ * A bare count is responsive shorthand — 1 column on phones, 2 from `sm`, the
+ * declared count from `md` — and the object form falls back to the "cards
+ * reflow" default so a sparse `{ lg: 4 }` still stacks on a phone.
+ */
+function gridColumnClasses(columns: GridColumns): string[] {
   const single = clampColumns(columns);
-  // A bare count is responsive shorthand — 1 column on phones, 2 from `sm`,
-  // the declared count from `md` — and the object form falls back to the
-  // "cards reflow" default so a sparse `{ lg: 4 }` still stacks on a phone.
   const perBreakpoint =
     single !== undefined
       ? { base: 1, sm: Math.min(2, single), md: single, lg: undefined }
@@ -624,15 +630,20 @@ function GridComponent({ props, children }: { props: GridProps; children: ReactN
           lg:
             clampColumns((columns as { lg?: number } | undefined)?.lg) ?? (columns ? undefined : 3),
         };
+  return [
+    gridColsClass[perBreakpoint.base],
+    perBreakpoint.sm ? gridColsSmClass[perBreakpoint.sm] : undefined,
+    perBreakpoint.md ? gridColsMdClass[perBreakpoint.md] : undefined,
+    perBreakpoint.lg ? gridColsLgClass[perBreakpoint.lg] : undefined,
+  ].filter((value): value is string => Boolean(value));
+}
 
+function GridComponent({ props, children }: { props: GridProps; children: ReactNode }) {
   return (
     <div
       className={cn(
         "grid min-w-0",
-        gridColsClass[perBreakpoint.base],
-        perBreakpoint.sm ? gridColsSmClass[perBreakpoint.sm] : undefined,
-        perBreakpoint.md ? gridColsMdClass[perBreakpoint.md] : undefined,
-        perBreakpoint.lg ? gridColsLgClass[perBreakpoint.lg] : undefined,
+        ...gridColumnClasses(props.columns as GridColumns),
         stackGapClass[props.gap ?? "md"],
         props.padding ? paddingClass[props.padding] : undefined,
       )}
@@ -1498,16 +1509,26 @@ function TableComponent({ props }: { props: TableProps }) {
   );
 
   const builtColumnDefs: ColDef<Record<string, unknown>>[] = columns.map((column) => {
-    const endAligned = column.align ? column.align === "end" : END_ALIGNED_KINDS.has(column.kind);
+    const template = column.format;
+    // A templated column renders its `{{field}}` text verbatim — `kind` only
+    // drives a single-field column.
+    const kind = template ? undefined : column.kind;
+    const endAligned = column.align ? column.align === "end" : END_ALIGNED_KINDS.has(kind);
     return {
       headerName: column.label ?? column.key,
-      field: column.key,
+      // A templated column has no single source field — its value is derived
+      // from the whole row via `valueGetter` instead.
+      field: template ? undefined : column.key,
+      valueGetter: template
+        ? (params: ValueGetterParams<Record<string, unknown>>) =>
+            applyTemplate(template, params.data ?? {})
+        : undefined,
       // Explicit `width` pins a column; everything else stretches (`flex: 1`) from
       // a kind-appropriate floor. Never `sizeColumnsToFit` here — see the
       // `columnSizing="flex"` note on `DataGrid`.
       width: column.width,
-      flex: column.width ? undefined : flexForKind(column.kind),
-      minWidth: column.width ? undefined : minWidthForKind(column.kind),
+      flex: column.width ? undefined : flexForKind(kind),
+      minWidth: column.width ? undefined : minWidthForKind(kind),
       // Pinned columns survive horizontal scroll (id on the left, status on the
       // right) — the mobile answer for wide tables.
       pinned: column.pinned,
@@ -1523,12 +1544,13 @@ function TableComponent({ props }: { props: TableProps }) {
       // (yes / no text) and reads as a broken toggle. Opt every app column out of
       // inference and let the value formatter own the rendering.
       cellDataType: false,
-      valueFormatter: (params) => formatValue(column.kind, params.value),
+      valueFormatter: (params) =>
+        template ? String(params.value ?? "") : formatValue(kind, params.value),
       cellRenderer: (params: ICellRendererParams<Record<string, unknown>>) => {
         const value = params.value;
         const row = (params.data ?? {}) as Record<string, unknown>;
         const raw = value === null || value === undefined ? "" : String(value);
-        switch (column.kind) {
+        switch (kind) {
           case "badge":
             return raw ? <StatusPill text={raw} tone={badgeToneFor(column.tones, raw)} /> : null;
           case "status":
@@ -1577,7 +1599,7 @@ function TableComponent({ props }: { props: TableProps }) {
             // never applies to one, so long titles hard-clip mid-word. Wrapping
             // the value in a real element gives the ellipsis something to bite on
             // (and a native tooltip carrying the full text).
-            const text = params.valueFormatted ?? formatValue(column.kind, value);
+            const text = params.valueFormatted ?? (template ? raw : formatValue(kind, value));
             if (!text) return null;
             if (column.truncate === "middle") {
               return <MiddleTruncation className="block w-full">{text}</MiddleTruncation>;
@@ -2122,6 +2144,7 @@ function FormComponent({ props }: { props: FormProps }) {
 
 type DrawerComponentProps = InferComponentProps<typeof swarmCatalog, "Drawer">;
 type DetailListComponentProps = InferComponentProps<typeof swarmCatalog, "DetailList">;
+type CardGridComponentProps = InferComponentProps<typeof swarmCatalog, "CardGrid">;
 type KanbanComponentProps = InferComponentProps<typeof swarmCatalog, "Kanban">;
 type CalendarComponentProps = InferComponentProps<typeof swarmCatalog, "Calendar">;
 type ContributionGraphComponentProps = InferComponentProps<
@@ -2374,7 +2397,7 @@ function toDate(value: unknown): Date | null {
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
-/** Runs an action chain with `$row` bound, the same way Table row actions do. */
+/** Runs an action chain with `$row` (and `$rowIndex` when given) bound, the same way Table row actions do. */
 function useRowActionRunner() {
   const { execute } = useActions();
   const { getSnapshot } = useStateStore();
@@ -2382,9 +2405,9 @@ function useRowActionRunner() {
   executeRef.current = execute;
   const snapshotRef = useRef(getSnapshot);
   snapshotRef.current = getSnapshot;
-  return useCallback(async (chain: ActionChain | undefined, row: Row) => {
+  return useCallback(async (chain: ActionChain | undefined, row: Row, rowIndex?: number) => {
     if (!chain) return;
-    const scope = { row, state: snapshotRef.current() };
+    const scope = { row, rowIndex, state: snapshotRef.current() };
     for (const binding of chain) {
       await executeRef.current({ ...binding, params: resolveScopedParams(binding.params, scope) });
     }
@@ -2709,6 +2732,162 @@ function ContributionGraphComponent({ props }: { props: ContributionGraphCompone
   );
 }
 
+// ─── CardGrid ───────────────────────────────────────────────────────────────
+
+const CARD_GRID_SKELETON_COUNT = 3;
+
+/** `CardGrid.columns` default: wider cards than `Grid`'s, three across from `md`. */
+const CARD_GRID_DEFAULT_COLUMNS: GridColumns = { base: 1, sm: 2, md: 3 };
+
+/** One `CardGrid.fields[]` entry rendered into the `·`-joined meta line, or `null` to skip it (empty value). */
+function cardGridMetaItem(field: CardGridField, value: unknown): ReactNode | null {
+  if (field.kind === "badge") {
+    const raw = value === null || value === undefined ? "" : String(value);
+    return raw ? <StatusPill text={raw} tone={badgeToneFor(field.tones, raw)} /> : null;
+  }
+  const text = formatValue(field.kind, value);
+  return text || null;
+}
+
+/**
+ * Card image tile. Row data is writable by any app user, so only an absolute
+ * http(s) URL becomes an `<img>` (never `javascript:` / `data:`); anything
+ * else, or a load failure, shows the placeholder.
+ */
+function CardGridImage({ value }: { value: unknown }) {
+  const src = safeHttpUrl(value);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  return (
+    <div className="flex aspect-video w-full items-center justify-center bg-muted text-muted-foreground">
+      {src && failedSrc !== src ? (
+        <img
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={() => setFailedSrc(src)}
+          referrerPolicy="no-referrer"
+          src={src}
+        />
+      ) : (
+        <ImageIcon aria-hidden className="size-8" data-testid="json-render-card-grid-placeholder" />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Responsive grid of data-bound cards — the visual counterpart to `Table` for
+ * record browsers. Each row renders as a card with an image (or placeholder)
+ * tile, a title, and an unlabeled meta line built from `fields`. With
+ * `onClick` set, every card is a keyboard-reachable button that runs the
+ * chain with `$row` / `$rowIndex` bound.
+ */
+function CardGridComponent({ props }: { props: CardGridComponentProps }) {
+  const runChain = useRowActionRunner();
+  const rows = Array.isArray(props.data) ? (props.data as Row[]) : [];
+  const fields = (props.fields ?? []) as CardGridField[];
+  const onClick = props.onClick as ActionChain | undefined;
+  const clickable = (onClick?.length ?? 0) > 0;
+  const gridClassName = cn(
+    "grid min-w-0",
+    ...gridColumnClasses((props.columns as GridColumns) ?? CARD_GRID_DEFAULT_COLUMNS),
+    stackGapClass.md,
+  );
+
+  if (props.error) {
+    return (
+      <div data-testid="json-render-card-grid">
+        <AlertCallout tone="error" icon={AlertCircle} title="Query failed">
+          {props.error}
+        </AlertCallout>
+      </div>
+    );
+  }
+
+  if (props.loading && rows.length === 0) {
+    return (
+      <div className={gridClassName} data-testid="json-render-card-grid">
+        {Array.from({ length: CARD_GRID_SKELETON_COUNT }, (_, index) => (
+          <UiCard key={index} className="gap-0 overflow-hidden py-0">
+            <Skeleton className="aspect-video w-full rounded-none" />
+            <CardContent className="flex flex-col gap-2 p-4">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-3 w-1/3" />
+            </CardContent>
+          </UiCard>
+        ))}
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground" data-testid="json-render-card-grid">
+        {props.emptyMessage ?? "No records yet"}
+      </p>
+    );
+  }
+
+  return (
+    <div className={gridClassName} data-testid="json-render-card-grid">
+      {rows.map((row, index) => {
+        const title = row[props.titleKey];
+        const titleText =
+          title === null || title === undefined || title === "" ? "—" : String(title);
+        const metaItems = fields
+          .map((field) => ({ key: field.key, node: cardGridMetaItem(field, row[field.key]) }))
+          .filter((item): item is { key: string; node: ReactNode } => item.node !== null);
+        const rowKey = typeof row.id === "string" || typeof row.id === "number" ? row.id : index;
+        const activate = clickable ? () => void runChain(onClick, row, index) : undefined;
+
+        return (
+          <UiCard
+            key={rowKey}
+            aria-label={clickable ? titleText : undefined}
+            className={cn(
+              "gap-0 overflow-hidden py-0",
+              clickable &&
+                "cursor-pointer outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+            )}
+            onClick={activate}
+            onKeyDown={
+              activate
+                ? (event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      // Space would otherwise scroll the page.
+                      event.preventDefault();
+                      activate();
+                    }
+                  }
+                : undefined
+            }
+            role={clickable ? "button" : undefined}
+            tabIndex={clickable ? 0 : undefined}
+          >
+            <CardGridImage value={props.imageKey ? row[props.imageKey] : undefined} />
+            <CardContent className="flex flex-col gap-1.5 p-4">
+              <p className="m-0 line-clamp-2 text-sm font-medium text-foreground" title={titleText}>
+                {titleText}
+              </p>
+              {metaItems.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                  {metaItems.map((item, itemIndex) => (
+                    <span key={item.key} className="flex items-center gap-1.5">
+                      {itemIndex > 0 && <span aria-hidden="true">·</span>}
+                      {item.node}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </CardContent>
+          </UiCard>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Status, feedback and loaders ───────────────────────────────────────────
 
 type BadgeComponentProps = InferComponentProps<typeof swarmCatalog, "Badge">;
@@ -2979,6 +3158,7 @@ const iconToneClass: Record<
 export const swarmComponents: Components<typeof swarmCatalog> = {
   Drawer: ({ props, children }) => <DrawerComponent props={props}>{children}</DrawerComponent>,
   DetailList: ({ props }) => <DetailListComponent props={props} />,
+  CardGrid: ({ props }) => <CardGridComponent props={props} />,
   Stack: ({ props, children }) => <StackComponent props={props}>{children}</StackComponent>,
   Grid: ({ props, children }) => <GridComponent props={props}>{children}</GridComponent>,
   Split: ({ props, children }) => <SplitComponent props={props}>{children}</SplitComponent>,
