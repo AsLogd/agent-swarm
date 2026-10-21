@@ -9,27 +9,39 @@
  * A malformed or absent `nodes` value renders an empty state rather than
  * throwing — the doc is user/agent-authored and may be mid-edit.
  *
- * Expand/collapse state is lifted to this component (a `Set` of collapsed
- * keys) rather than kept per-row, so the visible row order can be flattened
- * once per render — that flattened order drives the alternating row shading,
- * and stays correct as branches toggle open/closed. The flattening itself and
- * the input coercion live in `tree-model.ts`, React-free.
+ * Rendering is one flat pass: `flattenVisible` (in `tree-model.ts`) walks the
+ * doc depth-first once per `nodes` / collapse change and yields the visible
+ * rows with their depth and connector geometry, and this component renders
+ * that list into a single `<ul>`. A row's position in that list drives the
+ * alternating shading, so it stays correct as branches toggle and when one
+ * key appears more than once.
+ *
+ * Selection and collapse are keyed by node key, not by position: in a
+ * diamond (one key reachable through two parents) both occurrences select and
+ * collapse together. The component never writes `null` to `/ui/<id>/value`:
+ * when the selected key disappears from the doc (a refetch, an edit) the
+ * stored key stays and no row renders selected, so a transient empty doc does
+ * not wipe the selection.
  *
  * Rows scroll inside a fixed-height viewport (`maxHeight`, default `480px`)
  * rather than growing the card unbounded — large docs stay navigable. Set
  * `fill` to grow inside a `fill`-aware parent instead and scroll within
  * whatever height that gives it (ignores `maxHeight`).
+ *
+ * Keyboard: rows are buttons in the Tab order; ArrowLeft collapses and
+ * ArrowRight expands the focused row. The chevrons are click targets only,
+ * out of the Tab order. No `role="tree"` or roving tabindex yet.
  */
 
 import { getByPath, type InferComponentProps } from "@json-render/core";
 import { useStateStore } from "@json-render/react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { type KeyboardEvent, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { swarmCatalog } from "./catalog";
-import { childKeys, flattenVisible, nodeType, normalizeNodes, type TreeNode } from "./tree-model";
+import { flattenVisible, normalizeNodes, type TreeRowModel } from "./tree-model";
 
 export type TreeProps = InferComponentProps<typeof swarmCatalog, "Tree">;
 
@@ -40,49 +52,32 @@ const TREE_INDENT = 12;
 
 const FOCUS_RING = "rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-const NO_ANCESTORS: ReadonlySet<string> = new Set();
-
 function TreeRow({
-  nodeKey,
-  elements,
-  depth,
-  isLast,
-  ancestorLines,
+  row,
+  index,
   selected,
   onSelect,
-  collapsed,
   onToggle,
-  rowIndexByKey,
-  rowIndex,
-  ancestors,
 }: {
-  nodeKey: string;
-  elements: Record<string, TreeNode>;
-  depth: number;
-  // Whether this node is the last among its own siblings — controls whether
-  // its elbow's trunk continues below it to a following sibling.
-  isLast: boolean;
-  // One entry per ancestor level (1..depth-1): true if that ancestor has a
-  // later sibling still to come, so its trunk line must pass through this row.
-  ancestorLines: boolean[];
+  row: TreeRowModel;
+  /** Position in the flat visible list — drives the alternating shading. */
+  index: number;
   selected: string | null;
   onSelect: (key: string) => void;
-  collapsed: ReadonlySet<string>;
   onToggle: (key: string) => void;
-  rowIndexByKey: ReadonlyMap<string, number>;
-  rowIndex: number;
-  // The keys on the path from the root down to this row's parent. A key that
-  // reappears on its own ancestor path (a cyclic children graph in an
-  // untrusted doc) renders once more but is not descended into — the same
-  // rule `flattenVisible` applies.
-  ancestors: ReadonlySet<string>;
 }) {
-  const node = elements[nodeKey];
-  const children = ancestors.has(nodeKey) ? [] : childKeys(node);
-  const hasChildren = children.length > 0;
-  const expanded = !collapsed.has(nodeKey);
-  const isSelected = selected === nodeKey;
-  const isOddRow = rowIndex % 2 === 1;
+  const { key, type, depth, isLast, ancestorLines, hasChildren, expanded } = row;
+  const isSelected = selected === key;
+  const isOddRow = index % 2 === 1;
+
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!hasChildren) return;
+    const collapse = event.key === "ArrowLeft" && expanded;
+    const expand = event.key === "ArrowRight" && !expanded;
+    if (!collapse && !expand) return;
+    event.preventDefault();
+    onToggle(key);
+  };
 
   return (
     <li className="relative">
@@ -100,13 +95,11 @@ function TreeRow({
         {hasChildren ? (
           <button
             type="button"
+            tabIndex={-1}
             aria-label={expanded ? "Collapse" : "Expand"}
             aria-expanded={expanded}
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center text-muted-foreground",
-              FOCUS_RING,
-            )}
-            onClick={() => onToggle(nodeKey)}
+            className="flex size-4 shrink-0 items-center justify-center text-muted-foreground"
+            onClick={() => onToggle(key)}
           >
             {expanded ? (
               <ChevronDown className="size-3.5" />
@@ -119,13 +112,17 @@ function TreeRow({
         )}
         <button
           type="button"
+          data-slot="tree-row"
           aria-current={isSelected ? "true" : undefined}
           className={cn("min-w-0 flex-1 truncate text-left", FOCUS_RING)}
-          onClick={() => onSelect(nodeKey)}
-          title={`${nodeKey} — ${nodeType(node)}`}
+          onClick={() => onSelect(key)}
+          onKeyDown={onKeyDown}
+          title={`${key} — ${type}`}
         >
-          <span className="font-mono">{nodeKey}</span>
-          <span className="text-muted-foreground"> — {nodeType(node)}</span>
+          <span data-slot="tree-row-key" className="font-mono">
+            {key}
+          </span>
+          <span className="text-muted-foreground"> — {type}</span>
         </button>
       </div>
       {depth > 0 ? (
@@ -162,27 +159,6 @@ function TreeRow({
           />
         </>
       ) : null}
-      {hasChildren && expanded ? (
-        <ul>
-          {children.map((childKey, index) => (
-            <TreeRow
-              key={childKey}
-              nodeKey={childKey}
-              elements={elements}
-              depth={depth + 1}
-              isLast={index === children.length - 1}
-              ancestorLines={depth === 0 ? [] : [...ancestorLines, !isLast]}
-              selected={selected}
-              onSelect={onSelect}
-              collapsed={collapsed}
-              onToggle={onToggle}
-              rowIndexByKey={rowIndexByKey}
-              rowIndex={rowIndexByKey.get(childKey) ?? 0}
-              ancestors={new Set(ancestors).add(nodeKey)}
-            />
-          ))}
-        </ul>
-      ) : null}
     </li>
   );
 }
@@ -193,7 +169,7 @@ export function TreeComponent({ props }: { props: TreeProps }) {
   const labelId = `ui-${props.id}-label`;
   const stored = getByPath(state, path);
   const selected = typeof stored === "string" ? stored : null;
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
 
   const toggle = (key: string) => {
     setCollapsed((prev) => {
@@ -204,9 +180,12 @@ export function TreeComponent({ props }: { props: TreeProps }) {
     });
   };
 
-  const normalized = normalizeNodes(props.nodes);
-  const visible = normalized ? flattenVisible(normalized.root, normalized.elements, collapsed) : [];
-  const rowIndexByKey = new Map(visible.map((key, i) => [key, i]));
+  // The store re-renders this component on every state change; the walk only
+  // depends on the doc and the collapsed set.
+  const rows = useMemo(() => {
+    const normalized = normalizeNodes(props.nodes);
+    return normalized ? flattenVisible(normalized.root, normalized.elements, collapsed) : [];
+  }, [props.nodes, collapsed]);
   const fill = props.fill === true;
 
   return (
@@ -216,27 +195,20 @@ export function TreeComponent({ props }: { props: TreeProps }) {
         <CardContent
           className={cn("min-w-0 px-0", fill && "flex min-h-0 flex-1 flex-col overflow-hidden")}
         >
-          {normalized && normalized.root.length > 0 ? (
+          {rows.length > 0 ? (
             <div
               className={cn("min-w-0 overflow-y-auto", fill && "min-h-0 flex-1")}
               style={fill ? undefined : { maxHeight: props.maxHeight ?? "480px" }}
             >
               <ul className="min-w-0" aria-labelledby={props.label ? labelId : undefined}>
-                {normalized.root.map((rootKey) => (
+                {rows.map((row, index) => (
                   <TreeRow
-                    key={rootKey}
-                    nodeKey={rootKey}
-                    elements={normalized.elements}
-                    depth={0}
-                    isLast={true}
-                    ancestorLines={[]}
+                    key={row.id}
+                    row={row}
+                    index={index}
                     selected={selected}
                     onSelect={(key) => set(path, key)}
-                    collapsed={collapsed}
                     onToggle={toggle}
-                    rowIndexByKey={rowIndexByKey}
-                    rowIndex={rowIndexByKey.get(rootKey) ?? 0}
-                    ancestors={NO_ANCESTORS}
                   />
                 ))}
               </ul>

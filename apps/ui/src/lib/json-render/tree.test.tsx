@@ -39,48 +39,115 @@ async function mount(props: TreeProps, initialState: Record<string, unknown> = {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  await act(async () =>
-    root.render(
-      <StateProvider initialState={initialState} onStateChange={(batch) => changes.push(...batch)}>
-        <TreeComponent props={props} />
-      </StateProvider>,
-    ),
-  );
-  return { host, changes, unmount: () => act(async () => root.unmount()) };
+  const render = (next: TreeProps) =>
+    act(async () =>
+      root.render(
+        <StateProvider
+          initialState={initialState}
+          onStateChange={(batch) => changes.push(...batch)}
+        >
+          <TreeComponent props={next} />
+        </StateProvider>,
+      ),
+    );
+  await render(props);
+  return { host, changes, rerender: render, unmount: () => act(async () => root.unmount()) };
 }
 
-/** The row buttons (the chevrons carry `aria-label`, rows carry `title`). */
 function rows(host: HTMLElement): HTMLButtonElement[] {
-  return [...host.querySelectorAll<HTMLButtonElement>("button[title]")];
+  return [...host.querySelectorAll<HTMLButtonElement>('button[data-slot="tree-row"]')];
 }
 
 function rowKeys(host: HTMLElement): string[] {
-  return rows(host).map((button) => button.querySelector(".font-mono")?.textContent ?? "");
+  return rows(host).map(
+    (button) => button.querySelector('[data-slot="tree-row-key"]')?.textContent ?? "",
+  );
+}
+
+function selectedKeys(host: HTMLElement): string[] {
+  return rows(host)
+    .filter((button) => button.getAttribute("aria-current") === "true")
+    .map((button) => button.querySelector('[data-slot="tree-row-key"]')?.textContent ?? "");
+}
+
+function press(target: HTMLElement, key: string) {
+  return act(async () => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
 }
 
 test("clicking a row writes its key to /ui/<id>/value and the row renders selected", async () => {
   const { host, changes, unmount } = await mount({ id: "nodes", nodes });
   expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
-  expect(rows(host).some((button) => button.getAttribute("aria-current") === "true")).toBe(false);
+  expect(selectedKeys(host)).toEqual([]);
 
-  const b = rows(host)[1];
-  await act(async () => b?.click());
+  await act(async () => rows(host)[1]?.click());
   expect(changes).toEqual([{ path: "/ui/nodes/value", value: "b" }]);
-  expect(rows(host)[1]?.getAttribute("aria-current")).toBe("true");
-  expect(rows(host)[0]?.getAttribute("aria-current")).toBeNull();
+  expect(selectedKeys(host)).toEqual(["b"]);
   await unmount();
 });
 
 test("the row bound to an already-stored value starts selected", async () => {
   const { host, unmount } = await mount({ id: "nodes", nodes }, { ui: { nodes: { value: "d" } } });
-  expect(rows(host)[3]?.getAttribute("aria-current")).toBe("true");
+  expect(selectedKeys(host)).toEqual(["d"]);
   await unmount();
 });
 
-test("the chevron collapses and re-expands a branch", async () => {
+test("a non-string stored value selects nothing", async () => {
+  const { host, unmount } = await mount({ id: "nodes", nodes }, { ui: { nodes: { value: 42 } } });
+  expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
+  expect(selectedKeys(host)).toEqual([]);
+  await unmount();
+});
+
+test("the selection survives its key leaving the doc, without a write", async () => {
+  const { host, changes, rerender, unmount } = await mount({ id: "nodes", nodes });
+  await act(async () => rows(host)[1]?.click());
+  expect(selectedKeys(host)).toEqual(["b"]);
+
+  await rerender({
+    id: "nodes",
+    nodes: {
+      root: ["a"],
+      elements: { a: { type: "Stack", children: ["c"] }, c: { type: "Text" } },
+    },
+  });
+  expect(rowKeys(host)).toEqual(["a", "c"]);
+  expect(selectedKeys(host)).toEqual([]);
+  expect(changes).toEqual([{ path: "/ui/nodes/value", value: "b" }]);
+  await unmount();
+});
+
+test("a string root renders its rows", async () => {
+  const { host, unmount } = await mount({ id: "nodes", nodes: { ...nodes, root: "a" } });
+  expect(rowKeys(host)).toEqual(["a", "b", "c"]);
+  await unmount();
+});
+
+test("a diamond renders the shared key twice and selects both occurrences", async () => {
+  const diamond = {
+    root: "a",
+    elements: {
+      a: { type: "Stack", children: ["b", "c"] },
+      b: { type: "Stack", children: ["d"] },
+      c: { type: "Stack", children: ["d"] },
+      d: { type: "Text" },
+    },
+  };
+  const { host, changes, unmount } = await mount({ id: "nodes", nodes: diamond });
+  expect(rowKeys(host)).toEqual(["a", "b", "d", "c", "d"]);
+
+  await act(async () => rows(host)[2]?.click());
+  expect(changes).toEqual([{ path: "/ui/nodes/value", value: "d" }]);
+  expect(selectedKeys(host)).toEqual(["d", "d"]);
+  await unmount();
+});
+
+test("the chevron collapses and re-expands a branch, outside the Tab order", async () => {
   const { host, unmount } = await mount({ id: "nodes", nodes });
   const collapse = host.querySelector<HTMLButtonElement>('button[aria-label="Collapse"]');
   expect(collapse?.getAttribute("aria-expanded")).toBe("true");
+  expect(collapse?.tabIndex).toBe(-1);
   await act(async () => collapse?.click());
   expect(rowKeys(host)).toEqual(["a", "d"]);
 
@@ -88,6 +155,27 @@ test("the chevron collapses and re-expands a branch", async () => {
   expect(expand?.getAttribute("aria-expanded")).toBe("false");
   await act(async () => expand?.click());
   expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
+  await unmount();
+});
+
+test("ArrowLeft collapses and ArrowRight expands the focused row", async () => {
+  const { host, changes, unmount } = await mount({ id: "nodes", nodes });
+  const a = rows(host)[0];
+  a?.focus();
+  await press(a as HTMLElement, "ArrowLeft");
+  expect(rowKeys(host)).toEqual(["a", "d"]);
+  await press(rows(host)[0] as HTMLElement, "ArrowLeft");
+  expect(rowKeys(host)).toEqual(["a", "d"]);
+
+  await press(rows(host)[0] as HTMLElement, "ArrowRight");
+  expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
+  await press(rows(host)[0] as HTMLElement, "ArrowRight");
+  expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
+
+  // A leaf ignores both keys; arrows never write a selection.
+  await press(rows(host)[1] as HTMLElement, "ArrowLeft");
+  expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
+  expect(changes).toEqual([]);
   await unmount();
 });
 
