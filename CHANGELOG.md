@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Worker image bumps opencode to 2.1.1 and amp to 0.0.1792506219-g025e7e (#2295); the UI image moves to `nginx-unprivileged` 1.31.6 (#2299).
 
 ### Fixed
+- Memory: task completion memories are chunked like `memory-store`, so a long output gets a vector for every chunk. Search keeps the best chunk per task and widens its candidate window so one task's chunks cannot crowd out other matches. A repeat write for a task replaces its earlier chunks in one transaction. The chunker no longer drops markdown sections under 50 characters; it packs them into shared chunks. The embedding provider cuts any input over the model's token cap, and one oversized input no longer fails its whole batch, so the boot backfill now fills rows it used to leave without a vector.
 - Codex OAuth: the keep-warm sweep refreshes pool slots at 5 days instead of 7, and `CODEX_OAUTH_KEEP_WARM_MAX_AGE_HOURS` sets the age, so a ChatGPT session that ends before day 7 gets a refresh first (#2296).
 - Heartbeat: the checklist gate counts an `MM-DD` date as due only when it is a bare token, so a line carrying a full date such as a `2026-10-20T09:30Z` timestamp no longer counts as a due item (#2293).
 
