@@ -47,6 +47,37 @@ export interface TreeRowModel {
 }
 
 /**
+ * Rows emitted per walk before the outline is cut short. `nodes` is untrusted
+ * and a shared subtree is expanded under every parent, so a layered DAG of a
+ * few dozen elements can describe millions of rows; this bounds both the walk
+ * and the DOM.
+ */
+export const TREE_MAX_ROWS = 2000;
+
+/**
+ * Deepest row level (0-based) that is walked into. A row at this depth keeps
+ * its chevron but its children are not emitted.
+ */
+export const TREE_MAX_DEPTH = 32;
+
+export interface FlattenedTree {
+  rows: TreeRowModel[];
+  /** True when the row or depth cap cut the walk short. */
+  truncated: boolean;
+}
+
+/** One pending sibling list on the depth-first walk's explicit stack. */
+interface Frame {
+  level: readonly string[];
+  /** Index of the next sibling in `level` to emit. */
+  next: number;
+  depth: number;
+  parentId: string | null;
+  ancestors: ReadonlySet<string>;
+  ancestorLines: boolean[];
+}
+
+/**
  * The non-empty string entries of an untrusted key list, first occurrence
  * only. A repeated sibling key would otherwise render twice under one parent,
  * and an empty key has nothing to show.
@@ -99,49 +130,76 @@ export function nodeType(node: TreeNode | undefined): string {
  * the key is collapsed. A key already on its own ancestor path (a cyclic doc)
  * is listed once more but not descended into, so the walk always terminates.
  * A key reachable through two different parents is listed under each.
+ *
+ * The walk is iterative (an explicit frame stack, so depth can never overflow
+ * the call stack) and stops as soon as `TREE_MAX_ROWS` rows exist or a row
+ * sits at `TREE_MAX_DEPTH`; work is bounded by the caps, not by the size of
+ * the expansion the doc describes.
  */
 export function flattenVisible(
   keys: readonly string[],
   elements: Record<string, TreeNode>,
   collapsed: ReadonlySet<string>,
-): TreeRowModel[] {
+): FlattenedTree {
   const rows: TreeRowModel[] = [];
-  const walk = (
-    level: readonly string[],
-    depth: number,
-    parentId: string | null,
-    ancestors: ReadonlySet<string>,
-    ancestorLines: boolean[],
-  ) => {
-    level.forEach((key, index) => {
-      const node = ownNode(elements, key);
-      const children = ancestors.has(key) ? [] : childKeys(node);
-      const isLast = index === level.length - 1;
-      const hasChildren = children.length > 0;
-      const expanded = !collapsed.has(key);
-      const quoted = JSON.stringify(key);
-      const id = parentId === null ? quoted : `${parentId}/${quoted}`;
-      rows.push({
-        id,
-        key,
-        type: nodeType(node),
-        depth,
-        isLast,
-        ancestorLines,
-        hasChildren,
-        expanded,
-      });
-      if (hasChildren && expanded) {
-        walk(
-          children,
-          depth + 1,
-          id,
-          new Set(ancestors).add(key),
-          depth === 0 ? [] : [...ancestorLines, !isLast],
-        );
-      }
-    });
+  let truncated = false;
+  // Resolve each key's children once per walk: a key reached through many
+  // parents would otherwise re-scan its `children` list every time.
+  const childrenByKey = new Map<string, string[]>();
+  const childrenOf = (key: string): string[] => {
+    let children = childrenByKey.get(key);
+    if (children === undefined) {
+      children = childKeys(ownNode(elements, key));
+      childrenByKey.set(key, children);
+    }
+    return children;
   };
-  walk(keys, 0, null, new Set(), []);
-  return rows;
+
+  const stack: Frame[] = [
+    { level: keys, next: 0, depth: 0, parentId: null, ancestors: new Set(), ancestorLines: [] },
+  ];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (!frame) break;
+    const key = frame.level[frame.next];
+    if (key === undefined) {
+      stack.pop();
+      continue;
+    }
+    if (rows.length >= TREE_MAX_ROWS) {
+      truncated = true;
+      break;
+    }
+    const index = frame.next++;
+    const children = frame.ancestors.has(key) ? [] : childrenOf(key);
+    const isLast = index === frame.level.length - 1;
+    const hasChildren = children.length > 0;
+    const expanded = !collapsed.has(key);
+    const quoted = JSON.stringify(key);
+    const id = frame.parentId === null ? quoted : `${frame.parentId}/${quoted}`;
+    rows.push({
+      id,
+      key,
+      type: nodeType(ownNode(elements, key)),
+      depth: frame.depth,
+      isLast,
+      ancestorLines: frame.ancestorLines,
+      hasChildren,
+      expanded,
+    });
+    if (!hasChildren || !expanded) continue;
+    if (frame.depth >= TREE_MAX_DEPTH) {
+      truncated = true;
+      continue;
+    }
+    stack.push({
+      level: children,
+      next: 0,
+      depth: frame.depth + 1,
+      parentId: id,
+      ancestors: new Set(frame.ancestors).add(key),
+      ancestorLines: frame.depth === 0 ? [] : [...frame.ancestorLines, !isLast],
+    });
+  }
+  return { rows, truncated };
 }

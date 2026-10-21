@@ -4,6 +4,8 @@ import {
   flattenVisible,
   nodeType,
   normalizeNodes,
+  TREE_MAX_DEPTH,
+  TREE_MAX_ROWS,
   type TreeNode,
   type TreeRowModel,
 } from "./tree-model";
@@ -19,6 +21,12 @@ const elements: Record<string, TreeNode> = {
 
 const none = new Set<string>();
 const keysOf = (rows: TreeRowModel[]) => rows.map((row) => row.key);
+/** The rows of a walk, for the tests that are about order and shape rather than the caps. */
+const visible = (
+  keys: readonly string[],
+  nodes: Record<string, TreeNode>,
+  collapsed: ReadonlySet<string> = none,
+) => flattenVisible(keys, nodes, collapsed).rows;
 
 describe("normalizeNodes", () => {
   test("accepts root as a list of keys", () => {
@@ -83,11 +91,11 @@ describe("nodeType", () => {
 
 describe("flattenVisible", () => {
   test("lists keys depth-first, children right after their parent", () => {
-    expect(keysOf(flattenVisible(["a", "d"], elements, none))).toEqual(["a", "b", "e", "c", "d"]);
+    expect(keysOf(visible(["a", "d"], elements, none))).toEqual(["a", "b", "e", "c", "d"]);
   });
 
   test("each row carries its type, depth and connector geometry", () => {
-    const rows = flattenVisible(["a", "d"], elements, none);
+    const rows = visible(["a", "d"], elements, none);
     const geometry = rows.map(({ key, type, depth, isLast, ancestorLines, hasChildren }) => ({
       key,
       type,
@@ -115,19 +123,14 @@ describe("flattenVisible", () => {
   });
 
   test("a collapsed key hides its subtree but still reports children", () => {
-    const rows = flattenVisible(["a", "d"], elements, new Set(["a"]));
+    const rows = visible(["a", "d"], elements, new Set(["a"]));
     expect(keysOf(rows)).toEqual(["a", "d"]);
     expect(rows[0]).toMatchObject({ key: "a", hasChildren: true, expanded: false });
-    expect(keysOf(flattenVisible(["a", "d"], elements, new Set(["b"])))).toEqual([
-      "a",
-      "b",
-      "c",
-      "d",
-    ]);
+    expect(keysOf(visible(["a", "d"], elements, new Set(["b"])))).toEqual(["a", "b", "c", "d"]);
   });
 
   test("a child key missing from elements still gets a ? row", () => {
-    const rows = flattenVisible(["a"], { a: { type: "Stack", children: ["ghost"] } }, none);
+    const rows = visible(["a"], { a: { type: "Stack", children: ["ghost"] } }, none);
     expect(rows.map(({ key, type }) => ({ key, type }))).toEqual([
       { key: "a", type: "Stack" },
       { key: "ghost", type: "?" },
@@ -135,7 +138,7 @@ describe("flattenVisible", () => {
   });
 
   test("inherited object members are not nodes", () => {
-    const rows = flattenVisible(["constructor", "__proto__", "toString"], {}, none);
+    const rows = visible(["constructor", "__proto__", "toString"], {}, none);
     expect(rows.map(({ key, type, hasChildren }) => ({ key, type, hasChildren }))).toEqual([
       { key: "constructor", type: "?", hasChildren: false },
       { key: "__proto__", type: "?", hasChildren: false },
@@ -148,12 +151,12 @@ describe("flattenVisible", () => {
     const own = JSON.parse(
       '{"__proto__":{"type":"Stack","children":["x"]},"constructor":{"type":"Text"},"x":{"type":"Badge"}}',
     ) as Record<string, TreeNode>;
-    expect(keysOf(flattenVisible(["__proto__", "constructor"], own, none))).toEqual([
+    expect(keysOf(visible(["__proto__", "constructor"], own, none))).toEqual([
       "__proto__",
       "x",
       "constructor",
     ]);
-    expect(flattenVisible(["constructor"], own, none)[0]?.type).toBe("Text");
+    expect(visible(["constructor"], own, none)[0]?.type).toBe("Text");
   });
 
   test("a cycle terminates: the repeated key is listed once more, not descended into", () => {
@@ -161,10 +164,10 @@ describe("flattenVisible", () => {
       a: { type: "Stack", children: ["b"] },
       b: { type: "Stack", children: ["a"] },
     };
-    const rows = flattenVisible(["a"], cyclic, none);
+    const rows = visible(["a"], cyclic, none);
     expect(keysOf(rows)).toEqual(["a", "b", "a"]);
     expect(rows[2]?.hasChildren).toBe(false);
-    expect(keysOf(flattenVisible(["a"], { a: { type: "Stack", children: ["a"] } }, none))).toEqual([
+    expect(keysOf(visible(["a"], { a: { type: "Stack", children: ["a"] } }, none))).toEqual([
       "a",
       "a",
     ]);
@@ -177,7 +180,7 @@ describe("flattenVisible", () => {
       c: { type: "Stack", children: ["d"] },
       d: { type: "Text" },
     };
-    expect(keysOf(flattenVisible(["a"], diamond, none))).toEqual(["a", "b", "d", "c", "d"]);
+    expect(keysOf(visible(["a"], diamond, none))).toEqual(["a", "b", "d", "c", "d"]);
   });
 
   test("row ids are unique even when keys repeat or contain the separator", () => {
@@ -186,12 +189,106 @@ describe("flattenVisible", () => {
       b: { type: "Stack", children: ["a"] },
       "a/b": { type: "Text" },
     };
-    const rows = flattenVisible(["a", "a/b"], tricky, none);
+    const rows = visible(["a", "a/b"], tricky, none);
     expect(keysOf(rows)).toEqual(["a", "b", "a", "a/b", "a/b"]);
     expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
   });
 
   test("an empty root yields no rows", () => {
-    expect(flattenVisible([], elements, none)).toEqual([]);
+    expect(visible([], elements, none)).toEqual([]);
+  });
+});
+
+describe("flattenVisible caps", () => {
+  /**
+   * `levels` layers of two keys, each pointing at both keys of the next layer:
+   * 2^levels root-to-leaf paths described by 2 * levels elements.
+   */
+  function layeredDag(levels: number) {
+    const dag: Record<string, TreeNode> = {};
+    for (let i = 0; i < levels; i++) {
+      const children = i + 1 < levels ? [`L${i + 1}a`, `L${i + 1}b`] : undefined;
+      dag[`L${i}a`] = { type: "Stack", children };
+      dag[`L${i}b`] = { type: "Stack", children };
+    }
+    return { root: ["L0a", "L0b"], elements: dag };
+  }
+
+  function chain(length: number) {
+    const line: Record<string, TreeNode> = {};
+    for (let i = 0; i < length; i++) {
+      line[`n${i}`] = { type: "Stack", children: i + 1 < length ? [`n${i + 1}`] : undefined };
+    }
+    return { root: ["n0"], elements: line };
+  }
+
+  function wide(count: number) {
+    const root = Array.from({ length: count }, (_, i) => `k${i}`);
+    const leaves: Record<string, TreeNode> = {};
+    for (const key of root) leaves[key] = { type: "Text" };
+    return { root, elements: leaves };
+  }
+
+  function timed(doc: { root: string[]; elements: Record<string, TreeNode> }) {
+    const started = performance.now();
+    const result = flattenVisible(doc.root, doc.elements, none);
+    return { ...result, elapsed: performance.now() - started };
+  }
+
+  test("a normal doc is not truncated", () => {
+    expect(flattenVisible(["a", "d"], elements, none).truncated).toBe(false);
+  });
+
+  test("a layered shared-subtree DAG is cut at TREE_MAX_ROWS rows, quickly", () => {
+    const { rows, truncated, elapsed } = timed(layeredDag(40));
+    expect(rows.length).toBe(TREE_MAX_ROWS);
+    expect(truncated).toBe(true);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  test("the row cap is exact: TREE_MAX_ROWS rows pass, one more is cut", () => {
+    const exact = timed(wide(TREE_MAX_ROWS));
+    expect(exact.rows.length).toBe(TREE_MAX_ROWS);
+    expect(exact.truncated).toBe(false);
+
+    const over = timed(wide(TREE_MAX_ROWS + 1));
+    expect(over.rows.length).toBe(TREE_MAX_ROWS);
+    expect(over.truncated).toBe(true);
+  });
+
+  test("a 50,000-key doc is cut at the row cap without walking the rest", () => {
+    const { rows, truncated, elapsed } = timed(wide(50_000));
+    expect(rows.length).toBe(TREE_MAX_ROWS);
+    expect(truncated).toBe(true);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  test("a 50,000-element chain does not overflow the stack and is cut at the depth cap", () => {
+    const { rows, truncated } = timed(chain(50_000));
+    expect(truncated).toBe(true);
+    expect(rows.length).toBe(TREE_MAX_DEPTH + 1);
+    expect(rows.at(-1)).toMatchObject({
+      key: `n${TREE_MAX_DEPTH}`,
+      depth: TREE_MAX_DEPTH,
+      hasChildren: true,
+      expanded: true,
+    });
+  });
+
+  test("the depth cap is exact: a chain ending at TREE_MAX_DEPTH is complete, one deeper is cut", () => {
+    const fits = timed(chain(TREE_MAX_DEPTH + 1));
+    expect(fits.rows.length).toBe(TREE_MAX_DEPTH + 1);
+    expect(fits.truncated).toBe(false);
+
+    const over = timed(chain(TREE_MAX_DEPTH + 2));
+    expect(over.rows.length).toBe(TREE_MAX_DEPTH + 1);
+    expect(over.truncated).toBe(true);
+  });
+
+  test("a collapsed branch at the depth cap is not a truncation", () => {
+    const deep = chain(100);
+    const result = flattenVisible(deep.root, deep.elements, new Set([`n${TREE_MAX_DEPTH}`]));
+    expect(result.rows.length).toBe(TREE_MAX_DEPTH + 1);
+    expect(result.truncated).toBe(false);
   });
 });

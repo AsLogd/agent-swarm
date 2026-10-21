@@ -28,6 +28,10 @@
  * `fill` to grow inside a `fill`-aware parent instead and scroll within
  * whatever height that gives it (ignores `maxHeight`).
  *
+ * The doc is untrusted and a shared subtree is expanded under every parent,
+ * so the walk is capped at `TREE_MAX_ROWS` rows and `TREE_MAX_DEPTH` levels;
+ * past either cap a final muted row says the outline was cut short.
+ *
  * Keyboard: rows are buttons in the Tab order; ArrowLeft collapses and
  * ArrowRight expands the focused row. The chevrons are click targets only,
  * out of the Tab order. No `role="tree"` or roving tabindex yet.
@@ -41,9 +45,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { swarmCatalog } from "./catalog";
-import { flattenVisible, normalizeNodes, type TreeRowModel } from "./tree-model";
+import {
+  type FlattenedTree,
+  flattenVisible,
+  normalizeNodes,
+  TREE_MAX_ROWS,
+  type TreeRowModel,
+} from "./tree-model";
 
 export type TreeProps = InferComponentProps<typeof swarmCatalog, "Tree">;
+
+const EMPTY_TREE: FlattenedTree = { rows: [], truncated: false };
 
 // Per-nesting-level indent step, in px — also doubles as the connector
 // columns' x-spacing (`level * TREE_INDENT`) and as half the row height
@@ -182,9 +194,11 @@ export function TreeComponent({ props }: { props: TreeProps }) {
 
   // The store re-renders this component on every state change; the walk only
   // depends on the doc and the collapsed set.
-  const rows = useMemo(() => {
+  const { rows, truncated } = useMemo(() => {
     const normalized = normalizeNodes(props.nodes);
-    return normalized ? flattenVisible(normalized.root, normalized.elements, collapsed) : [];
+    return normalized
+      ? flattenVisible(normalized.root, normalized.elements, collapsed)
+      : EMPTY_TREE;
   }, [props.nodes, collapsed]);
   const fill = props.fill === true;
 
@@ -211,6 +225,15 @@ export function TreeComponent({ props }: { props: TreeProps }) {
                     onToggle={toggle}
                   />
                 ))}
+                {truncated ? (
+                  <li
+                    data-slot="tree-truncated"
+                    className="flex items-center gap-1 px-1 py-0.5 text-sm text-muted-foreground"
+                  >
+                    <span className="size-4 shrink-0" aria-hidden />
+                    Showing the first {TREE_MAX_ROWS.toLocaleString()} rows
+                  </li>
+                ) : null}
               </ul>
             </div>
           ) : (

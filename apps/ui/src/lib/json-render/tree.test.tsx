@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { act } from "react";
+import { TREE_MAX_ROWS } from "./tree-model";
 
 GlobalRegistrator.register();
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -176,6 +177,28 @@ test("ArrowLeft collapses and ArrowRight expands the focused row", async () => {
   await press(rows(host)[1] as HTMLElement, "ArrowLeft");
   expect(rowKeys(host)).toEqual(["a", "b", "c", "d"]);
   expect(changes).toEqual([]);
+  await unmount();
+});
+
+test("a doc past the row cap renders the first rows plus a notice, and rows still select", async () => {
+  const root = Array.from({ length: TREE_MAX_ROWS + 1 }, (_, i) => `k${i}`);
+  const elements = Object.fromEntries(root.map((key) => [key, { type: "Text" }]));
+  const { host, changes, unmount } = await mount({ id: "nodes", nodes: { root, elements } });
+  expect(rows(host).length).toBe(TREE_MAX_ROWS);
+
+  const notice = host.querySelector('li[data-slot="tree-truncated"]');
+  expect(notice?.textContent).toBe(`Showing the first ${TREE_MAX_ROWS.toLocaleString()} rows`);
+  expect(notice?.querySelector("button")).toBeNull();
+
+  await act(async () => rows(host)[7]?.click());
+  expect(changes).toEqual([{ path: "/ui/nodes/value", value: "k7" }]);
+  expect(selectedKeys(host)).toEqual(["k7"]);
+  await unmount();
+});
+
+test("a normal doc renders no truncation notice", async () => {
+  const { host, unmount } = await mount({ id: "nodes", nodes });
+  expect(host.querySelector('li[data-slot="tree-truncated"]')).toBeNull();
   await unmount();
 });
 
