@@ -186,6 +186,7 @@ import { formatValue, progressPercent } from "./format-value";
 import { CatalogIcon, catalogIcon } from "./icons";
 import { parseNumberInputValue } from "./number-input-value";
 import { useJsonRenderThemeAttr } from "./theme-scope";
+import { TreeComponent } from "./tree";
 import { usePageShortcut } from "./use-page-shortcut";
 
 // ─── Style maps (moved verbatim from json-page-renderer.tsx) ────────────────
@@ -3110,4 +3111,5 @@ export const swarmComponents: Components<typeof swarmCatalog> = {
   Kanban: ({ props }) => <KanbanComponent props={props} />,
   Calendar: ({ props }) => <CalendarComponent props={props} />,
   ContributionGraph: ({ props }) => <ContributionGraphComponent props={props} />,
+  Tree: ({ props }) => <TreeComponent props={props} />,
 };
